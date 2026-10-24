@@ -23,12 +23,15 @@ export default async function HomePage() {
     ),
   };
 
+  const isHostedDemo = Boolean(process.env.VERCEL);
+
   return (
     <Console
       initialApplications={applications}
       initialNotifications={notifications}
       initialReport={initialReport}
       integrations={integrations}
+      isHostedDemo={isHostedDemo}
     />
   );
 }

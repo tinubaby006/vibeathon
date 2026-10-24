@@ -100,7 +100,7 @@ function findMatchingProtectionEvidence(
       };
     }
 
-    const raw = fs.readFileSync(stateFile, "utf8");
+    const raw = fs.readFileSync(/*turbopackIgnore: true*/ stateFile, "utf8");
     const parsed = JSON.parse(raw);
     const validated = ControllerStateSchema.safeParse(parsed);
     if (!validated.success) {

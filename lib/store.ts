@@ -9,15 +9,24 @@ import {
   ScanReport,
 } from "./contracts";
 
+export const DATA_DIR = process.env.VERCEL
+  ? path.join("/tmp", "vibeathon-data")
+  : process.env.VRC_DATA_DIR?.trim()
+  ? path.resolve(process.env.VRC_DATA_DIR.trim())
+  : path.join(process.cwd(), "data");
+
 export function getStateFilePath(): string {
   if (process.env.VRC_STATE_FILE_PATH?.trim()) {
     return path.resolve(process.env.VRC_STATE_FILE_PATH.trim());
   }
-  return path.resolve(process.cwd(), "data", "state.json");
+  return path.join(DATA_DIR, "state.json");
 }
 
 export function getDataDir(): string {
-  return path.dirname(getStateFilePath());
+  if (process.env.VRC_STATE_FILE_PATH?.trim()) {
+    return path.dirname(path.resolve(process.env.VRC_STATE_FILE_PATH.trim()));
+  }
+  return DATA_DIR;
 }
 
 const DEFAULT_STATE: RootStore = {
@@ -70,7 +79,7 @@ export async function readStore(): Promise<RootStore> {
   await ensureDataDir();
   const filePath = getStateFilePath();
   try {
-    const raw = await fs.readFile(filePath, "utf-8");
+    const raw = await fs.readFile(/*turbopackIgnore: true*/ filePath, "utf-8");
     try {
       const parsed = JSON.parse(raw) as RootStore;
       if (!parsed || parsed.schemaVersion !== 1) {
@@ -82,9 +91,23 @@ export async function readStore(): Promise<RootStore> {
     }
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      // Initialize atomic file
-      await writeStoreDirect(DEFAULT_STATE);
-      return DEFAULT_STATE;
+      // Check if read-only bundled seed exists (separate from writable runtime path)
+      const bundledSeedPath = path.join(process.cwd(), "data", "state.json");
+      let seedToUse = DEFAULT_STATE;
+      if (filePath !== bundledSeedPath) {
+        try {
+          const seedRaw = await fs.readFile(/*turbopackIgnore: true*/ bundledSeedPath, "utf-8");
+          const parsedSeed = JSON.parse(seedRaw) as RootStore;
+          if (parsedSeed && parsedSeed.schemaVersion === 1) {
+            seedToUse = parsedSeed;
+          }
+        } catch {
+          // Bundled seed not present or unreadable, fall back to valid empty-state schema
+        }
+      }
+      // Initialize only genuinely missing file in writable runtime data dir
+      await writeStoreDirect(seedToUse);
+      return seedToUse;
     }
     throw err;
   }

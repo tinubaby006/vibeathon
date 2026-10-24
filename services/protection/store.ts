@@ -14,6 +14,7 @@ import {
   HistoryEntry,
   Rule,
 } from "./types";
+import { DATA_DIR } from "../../lib/store";
 
 const MAX_HISTORY_ENTRIES = 50;
 
@@ -21,7 +22,7 @@ export function getProtectionStateFilePath(): string {
   if (process.env.VRC_PROTECTION_STATE_FILE_PATH) {
     return path.resolve(process.env.VRC_PROTECTION_STATE_FILE_PATH);
   }
-  return path.resolve(process.cwd(), "data", "protection-state.json");
+  return path.join(DATA_DIR, "protection-state.json");
 }
 
 let writeMutex = Promise.resolve();
@@ -52,33 +53,49 @@ export class ProtectionStore {
     }
 
     if (!fs.existsSync(this.stateFilePath)) {
-      const initialState: ControllerState = {
-        version: 1,
-        controllerInstanceId: this.currentInstanceId,
-        activeRule: null,
-        ruleRevision: 0,
-        activatedAt: null,
-        relatedApprovalId: null,
-        relatedTestRunId: null,
-        proposals: [],
-        testRuns: [],
-        approvals: [],
-        history: [
-          {
-            id: crypto.randomUUID(),
-            timestamp: new Date().toISOString(),
-            type: "controller_started",
-            details: { controllerInstanceId: this.currentInstanceId, note: "Initialized fresh state" },
-          },
-        ],
-      };
+      const bundledProtectionPath = path.join(process.cwd(), "data", "protection-state.json");
+      let initialState: ControllerState | null = null;
+      if (this.stateFilePath !== bundledProtectionPath) {
+        try {
+          if (fs.existsSync(bundledProtectionPath)) {
+            const raw = fs.readFileSync(/*turbopackIgnore: true*/ bundledProtectionPath, "utf-8");
+            const parsed = JSON.parse(raw);
+            if (parsed && parsed.version === 1) {
+              initialState = parsed;
+            }
+          }
+        } catch {}
+      }
+
+      if (!initialState) {
+        initialState = {
+          version: 1,
+          controllerInstanceId: this.currentInstanceId,
+          activeRule: null,
+          ruleRevision: 0,
+          activatedAt: null,
+          relatedApprovalId: null,
+          relatedTestRunId: null,
+          proposals: [],
+          testRuns: [],
+          approvals: [],
+          history: [
+            {
+              id: crypto.randomUUID(),
+              timestamp: new Date().toISOString(),
+              type: "controller_started",
+              details: { controllerInstanceId: this.currentInstanceId, note: "Initialized fresh state" },
+            },
+          ],
+        };
+      }
       this.writeStateSync(initialState);
       this.state = initialState;
       return initialState;
     }
 
     try {
-      const raw = fs.readFileSync(this.stateFilePath, "utf8");
+      const raw = fs.readFileSync(/*turbopackIgnore: true*/ this.stateFilePath, "utf8");
       const parsed = JSON.parse(raw);
       const validated = ControllerStateSchema.parse(parsed);
 

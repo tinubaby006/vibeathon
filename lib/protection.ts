@@ -112,7 +112,7 @@ export async function validateScanTargetBinding(
   }
 
   if (scan.lockfileHash) {
-    const diskLockRaw = fs.readFileSync(pkgLockPath, "utf-8");
+    const diskLockRaw = fs.readFileSync(/*turbopackIgnore: true*/ pkgLockPath, "utf-8");
     const diskHash = crypto.createHash("sha256").update(diskLockRaw, "utf8").digest("hex");
     if (diskHash !== scan.lockfileHash) {
       return {
@@ -313,7 +313,7 @@ async function callController<T>(
       Authorization: `Bearer ${CONTROLLER_TOKEN}`,
       "Content-Type": "application/json",
     },
-    signal: AbortSignal.timeout(35000), // Bounded timeout
+    signal: AbortSignal.timeout(path === "/status" ? 2500 : 35000), // Bounded timeout (quick fail for status check)
   };
 
   if (body !== undefined) {

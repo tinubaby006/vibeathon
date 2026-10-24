@@ -45,6 +45,7 @@ interface ConsoleProps {
     geminiConfigured: boolean;
     emailConfigured: boolean;
   };
+  isHostedDemo?: boolean;
 }
 
 export default function Console({
@@ -52,6 +53,7 @@ export default function Console({
   initialNotifications,
   initialReport,
   integrations,
+  isHostedDemo = false,
 }: ConsoleProps) {
   const [applications, setApplications] = useState<Application[]>(initialApplications);
   const [selectedAppId, setSelectedAppId] = useState<string | null>(
@@ -457,6 +459,21 @@ export default function Console({
 
       {/* Main Container */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-5 space-y-5">
+        {/* Hosted Demo Storage Notice */}
+        {isHostedDemo && (
+          <div className="px-3.5 py-2 rounded-lg bg-vc-input/60 border border-vc-border text-[11px] text-vc-text-secondary flex items-center justify-between gap-2 shadow-xs">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-vc-accent/80 shrink-0" />
+              <span>
+                <strong className="text-vc-text-primary">Hosted Demo Storage Notice:</strong> Runtime state is stored in ephemeral instance storage (/tmp). Data may reset or differ across serverless instances and redeployments.
+              </span>
+            </div>
+            <span className="text-[10px] uppercase tracking-wider font-semibold text-vc-accent/90 shrink-0 hidden sm:inline">
+              Ephemeral Storage
+            </span>
+          </div>
+        )}
+
         {/* Compact Repository Toolbar */}
         <div className="bg-vc-card border border-vc-border rounded-xl p-3 sm:p-4 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 shadow-xs">
           {/* Left: Repository Selector, External Link, Scan Status, Target SHA, Last Scan Time */}
@@ -883,6 +900,8 @@ export default function Console({
                   <span className="text-[11px] text-vc-text-secondary leading-relaxed">
                     {protectionStatus.controllerOnline
                       ? "Loopback controller running on 127.0.0.1:8001 (Proxy on 8002)"
+                      : isHostedDemo
+                      ? "Unavailable in hosted demo: requires local loopback controller (npm run controller)"
                       : "Offline: Run 'npm run controller' in terminal to start"}
                   </span>
                 </div>
@@ -890,10 +909,10 @@ export default function Console({
                   className={`px-2 py-0.5 rounded text-[10px] font-semibold shrink-0 ${
                     protectionStatus.controllerOnline
                       ? "bg-vc-success/15 text-vc-success border border-vc-success/30"
-                      : "bg-vc-danger/15 text-vc-danger border border-vc-danger/30"
+                      : "bg-vc-input text-vc-text-secondary border border-vc-border"
                   }`}
                 >
-                  {protectionStatus.controllerOnline ? "Connected" : "Offline"}
+                  {protectionStatus.controllerOnline ? "Connected" : isHostedDemo ? "Unavailable" : "Offline"}
                 </span>
               </div>
 
@@ -912,7 +931,9 @@ export default function Console({
             </div>
 
             <div className="pt-2 border-t border-vc-border text-[11px] text-vc-text-secondary/70 text-center">
-              Local Node.js environment with isolated atomic filesystem persistence.
+              {isHostedDemo
+                ? "Hosted serverless environment with temporary instance storage (/tmp)."
+                : "Local Node.js environment with isolated atomic filesystem persistence."}
             </div>
           </div>
         </div>

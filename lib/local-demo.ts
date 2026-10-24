@@ -94,8 +94,8 @@ export async function scanLocalDemo(): Promise<{
     );
   }
 
-  const pkgJsonContent = fs.readFileSync(pkgJsonPath, "utf-8");
-  const pkgLockContent = fs.readFileSync(pkgLockPath, "utf-8");
+  const pkgJsonContent = fs.readFileSync(/*turbopackIgnore: true*/ pkgJsonPath, "utf-8");
+  const pkgLockContent = fs.readFileSync(/*turbopackIgnore: true*/ pkgLockPath, "utf-8");
 
   // Compute honest cryptographic provenance
   const manifestHash = crypto.createHash("sha256").update(pkgJsonContent, "utf8").digest("hex");
