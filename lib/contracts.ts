@@ -89,6 +89,7 @@ export interface ApplicationSnapshot {
   deploymentUrl: string | null;
   deploymentClaim: "repository_snapshot" | "developer_declared_commit";
   declaredDeployedCommit: string | null;
+  sourceType?: "github" | "local_demo";
 }
 
 export interface AiCoverage {
@@ -103,6 +104,10 @@ export interface ScanReport {
   completedAt: string;
   resolvedCommitSha: string | null;
   lockfileHash: string | null;
+  manifestHash?: string | null;
+  sourceFingerprint?: string | null;
+  runtimeInstanceId?: string | null;
+  sourceType?: "github" | "local_demo";
   status: "complete" | "partial" | "failed";
   scannedFiles: Array<{ path: string; gitHubUrl: string }>;
   coverage: ScanCoverage;
@@ -136,6 +141,7 @@ export interface Application {
   createdAt: string;
   lastScanId: string | null;
   lastSuccessfulScanId: string | null;
+  sourceType?: "github" | "local_demo";
 }
 
 export interface Notification {

@@ -9,8 +9,16 @@ import {
   ScanReport,
 } from "./contracts";
 
-const STATE_FILE_PATH = path.resolve(process.cwd(), "data", "state.json");
-const DATA_DIR = path.resolve(process.cwd(), "data");
+export function getStateFilePath(): string {
+  if (process.env.VRC_STATE_FILE_PATH?.trim()) {
+    return path.resolve(process.env.VRC_STATE_FILE_PATH.trim());
+  }
+  return path.resolve(process.cwd(), "data", "state.json");
+}
+
+export function getDataDir(): string {
+  return path.dirname(getStateFilePath());
+}
 
 const DEFAULT_STATE: RootStore = {
   schemaVersion: 1,
@@ -51,7 +59,7 @@ export function getActiveScanLock(): string | null {
 }
 
 async function ensureDataDir(): Promise<void> {
-  await fs.mkdir(DATA_DIR, { recursive: true });
+  await fs.mkdir(getDataDir(), { recursive: true });
 }
 
 /**
@@ -60,8 +68,9 @@ async function ensureDataDir(): Promise<void> {
  */
 export async function readStore(): Promise<RootStore> {
   await ensureDataDir();
+  const filePath = getStateFilePath();
   try {
-    const raw = await fs.readFile(STATE_FILE_PATH, "utf-8");
+    const raw = await fs.readFile(filePath, "utf-8");
     try {
       const parsed = JSON.parse(raw) as RootStore;
       if (!parsed || parsed.schemaVersion !== 1) {
@@ -86,10 +95,12 @@ export async function readStore(): Promise<RootStore> {
  */
 async function writeStoreDirect(state: RootStore): Promise<void> {
   await ensureDataDir();
-  const tempPath = path.resolve(DATA_DIR, `state.tmp.${randomUUID()}.json`);
+  const dir = getDataDir();
+  const filePath = getStateFilePath();
+  const tempPath = path.resolve(dir, `state.tmp.${randomUUID()}.json`);
   const content = JSON.stringify(state, null, 2);
   await fs.writeFile(tempPath, content, "utf-8");
-  await fs.rename(tempPath, STATE_FILE_PATH);
+  await fs.rename(tempPath, filePath);
 }
 
 /**

@@ -1,7 +1,9 @@
-import { describe, it, beforeEach } from "node:test";
+import { describe, it, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import os from "node:os";
+import { randomUUID } from "node:crypto";
 import {
   readStore,
   mutateStore,
@@ -12,14 +14,29 @@ import {
 } from "../lib/store";
 import { Application } from "../lib/contracts";
 
-const STATE_FILE_PATH = path.resolve(process.cwd(), "data", "state.json");
+let tempDir: string;
+let stateFilePath: string;
 
 describe("Store Persistence & Concurrency", () => {
+  before(async () => {
+    tempDir = path.join(os.tmpdir(), `vrc-test-store-${randomUUID()}`);
+    await fs.mkdir(tempDir, { recursive: true });
+    stateFilePath = path.join(tempDir, "state.json");
+    process.env.VRC_STATE_FILE_PATH = stateFilePath;
+  });
+
+  after(async () => {
+    delete process.env.VRC_STATE_FILE_PATH;
+    try {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    } catch {}
+  });
+
   beforeEach(async () => {
-    // Reset data/state.json to default state for clean testing
+    // Reset isolated state file for clean testing
     try {
       await fs.writeFile(
-        STATE_FILE_PATH,
+        stateFilePath,
         JSON.stringify(
           {
             schemaVersion: 1,
@@ -46,12 +63,12 @@ describe("Store Persistence & Concurrency", () => {
   });
 
   it("preserves corrupt store file and does not silently overwrite", async () => {
-    await fs.writeFile(STATE_FILE_PATH, "{ corrupt json ...", "utf-8");
+    await fs.writeFile(stateFilePath, "{ corrupt json ...", "utf-8");
     await assert.rejects(async () => {
       await readStore();
     }, /Corrupt state\.json detected/);
 
-    const raw = await fs.readFile(STATE_FILE_PATH, "utf-8");
+    const raw = await fs.readFile(stateFilePath, "utf-8");
     assert.equal(raw, "{ corrupt json ...");
   });
 

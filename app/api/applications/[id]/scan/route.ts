@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { ApiResult, ScanReport } from "@/lib/contracts";
 import { getApplication } from "@/lib/store";
 import { executeScan, ScannerError } from "@/lib/scanner";
+import { scanLocalDemo } from "@/lib/local-demo";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +26,14 @@ export async function POST(
         },
         { status: 404 }
       );
+    }
+
+    if (application.sourceType === "local_demo") {
+      const { scan } = await scanLocalDemo();
+      return NextResponse.json({
+        ok: true,
+        data: scan,
+      });
     }
 
     const report = await executeScan(application);

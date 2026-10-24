@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsx --test tests/**/*.test.ts"
+    "test": "tsx --test tests/**/*.test.ts",
+    "controller": "tsx services/protection/server.ts",
+    "demo": "node examples/preview-settings-demo/server.js"
   },
   "dependencies": {
     "@google/genai": "^2.31.0",

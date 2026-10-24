@@ -1,27 +1,45 @@
+// components/console.tsx
+// Refactored Vulnerability Response Console layout:
+// - Compact repository toolbar (selector, scan status, last scan time, scan button, export menu)
+// - Accessible tabs: Findings (with count), Protection (with active containment indicator), Agent handoff
+// - Connections popover in top bar distinguishing configured credentials from runtime operations
+// - Full state preservation across tab switches (no network calls, rescans, or cancelled work)
+
 'use client';
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   Application,
-  CommunityAssessment,
+  Finding,
   Notification,
   ScanReport,
 } from "@/lib/contracts";
 import ReportView from "./report-view";
-import CommunityReportForm from "./community-report-form";
+import ProtectionPanel from "./protection-panel";
+import HandoffView from "./handoff-view";
 import {
+  Activity,
   Bell,
+  Bot,
+  ChevronDown,
+  Download,
   ExternalLink,
+  FileCode,
+  FileText,
   Layers,
   Plus,
   RefreshCw,
   Shield,
+  Sparkles,
   X,
 } from "lucide-react";
+
+type ConsoleTab = "findings" | "protection" | "handoff";
 
 interface ConsoleProps {
   initialApplications: Application[];
   initialNotifications: Notification[];
+  initialReport?: ScanReport | null;
   integrations: {
     githubTokenConfigured: boolean;
     geminiConfigured: boolean;
@@ -32,21 +50,43 @@ interface ConsoleProps {
 export default function Console({
   initialApplications,
   initialNotifications,
+  initialReport,
   integrations,
 }: ConsoleProps) {
   const [applications, setApplications] = useState<Application[]>(initialApplications);
   const [selectedAppId, setSelectedAppId] = useState<string | null>(
     initialApplications[0]?.id || null
   );
-  const [activeReport, setActiveReport] = useState<ScanReport | null>(null);
+  const [activeReport, setActiveReport] = useState<ScanReport | null>(
+    initialReport || null
+  );
   const [notifications, setNotifications] = useState<Notification[]>(initialNotifications);
-  const [communitySignals, setCommunitySignals] = useState<CommunityAssessment[]>([]);
 
+  const [activeTab, setActiveTab] = useState<ConsoleTab>("findings");
   const [isScanning, setIsScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
 
+  // Modals and Popovers
   const [inboxOpen, setInboxOpen] = useState(false);
+  const [connectionsOpen, setConnectionsOpen] = useState(false);
   const [registerModalOpen, setRegisterModalOpen] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+
+  // Filter & Finding state (preserved across tab switches)
+  const [searchQuery, setSearchQuery] = useState("");
+  const [severityFilter, setSeverityFilter] = useState("all");
+  const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
+
+  // Protection Runtime & Eligibility State
+  const [protectionStatus, setProtectionStatus] = useState<{
+    eligible: boolean;
+    isRuleActive: boolean;
+    controllerOnline: boolean;
+  }>({
+    eligible: false,
+    isRuleActive: false,
+    controllerOnline: false,
+  });
 
   // Registration Form State
   const [repoUrl, setRepoUrl] = useState("");
@@ -54,7 +94,7 @@ export default function Console({
   const [requestedRef, setRequestedRef] = useState("");
   const [projectPath, setProjectPath] = useState("");
   const [deploymentUrl, setDeploymentUrl] = useState("");
-  const [deploymentClaim, setDeploymentClaim] = useState<"repository_snapshot" | "developer_declared_commit">("repository_snapshot");
+  const deploymentClaim = "repository_snapshot" as const;
   const [declaredDeployedCommit, setDeclaredDeployedCommit] = useState("");
   const [isRegistering, setIsRegistering] = useState(false);
   const [registerError, setRegisterError] = useState<string | null>(null);
@@ -69,7 +109,6 @@ export default function Console({
       Promise.resolve().then(() => {
         if (!cancelled) {
           setActiveReport(null);
-          setCommunitySignals([]);
         }
       });
       return;
@@ -92,12 +131,25 @@ export default function Console({
       });
     }
 
-    // Load community signals
-    fetch(`/api/community-reports?applicationId=${selectedApp.id}`)
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedAppId, selectedApp]);
+
+  // Initial protection check for active containment banner and tab badge
+  useEffect(() => {
+    if (!selectedAppId) return;
+    let cancelled = false;
+
+    fetch(`/api/protection/status?applicationId=${selectedAppId}`)
       .then((res) => res.json())
-      .then((json) => {
-        if (!cancelled && json.ok) {
-          setCommunitySignals(json.data);
+      .then((data) => {
+        if (!cancelled) {
+          setProtectionStatus({
+            eligible: Boolean(data.eligible),
+            isRuleActive: Boolean(data.runtimeStatus?.activeRule),
+            controllerOnline: Boolean(data.runtimeStatus),
+          });
         }
       })
       .catch(() => {});
@@ -105,7 +157,62 @@ export default function Console({
     return () => {
       cancelled = true;
     };
-  }, [selectedAppId, selectedApp]);
+  }, [selectedAppId, activeReport?.id]);
+
+  const [previousAppId, setPreviousAppId] = useState<string | null>(null);
+
+  const handleSelectApp = (appId: string) => {
+    setSelectedAppId(appId);
+    setSelectedFinding(null); // Clear active finding to avoid showing stale detail from another repo
+  };
+
+  const handleOpenLocalDemo = async () => {
+    try {
+      setIsScanning(true);
+      const res = await fetch("/api/protection/demo/init", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ autoScan: true }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) {
+        throw new Error(json.error?.message || "Failed to initialize local demo context");
+      }
+
+      const { application: demoApp, scan: demoScan } = json.data;
+
+      if (selectedAppId && selectedAppId !== demoApp.id) {
+        setPreviousAppId(selectedAppId);
+      }
+
+      setApplications((prev) => {
+        const filtered = prev.filter((a) => a.id !== demoApp.id);
+        return [demoApp, ...filtered];
+      });
+
+      setSelectedAppId(demoApp.id);
+      setActiveReport(demoScan);
+      setSelectedFinding(null);
+      setActiveTab("protection");
+    } catch (err: unknown) {
+      setScanError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsScanning(false);
+    }
+  };
+
+  const handleReturnFromDemo = () => {
+    if (previousAppId) {
+      setSelectedAppId(previousAppId);
+      setSelectedFinding(null);
+    } else {
+      const nonDemo = applications.find((a) => a.sourceType !== "local_demo");
+      if (nonDemo) {
+        setSelectedAppId(nonDemo.id);
+        setSelectedFinding(null);
+      }
+    }
+  };
 
   const handleRegisterApp = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -135,6 +242,7 @@ export default function Console({
       const newApp = json.data as Application;
       setApplications((prev) => [newApp, ...prev.filter((a) => a.id !== newApp.id)]);
       setSelectedAppId(newApp.id);
+      setSelectedFinding(null);
       setRegisterModalOpen(false);
 
       // Reset form
@@ -218,8 +326,42 @@ export default function Console({
       if (json.ok) {
         setActiveReport(json.data);
         setSelectedAppId(notif.applicationId);
+        setSelectedFinding(null);
         setInboxOpen(false);
       }
+    }
+  };
+
+  const refreshNotifications = useCallback(async () => {
+    try {
+      const res = await fetch("/api/notifications");
+      const json = await res.json();
+      if (json.ok && Array.isArray(json.data)) {
+        setNotifications(json.data);
+      }
+    } catch {}
+  }, []);
+
+  // Keyboard navigation for accessible tabs
+  const tabList: ConsoleTab[] = ["findings", "protection", "handoff"];
+  const handleTabKeyDown = (e: React.KeyboardEvent, currentTab: ConsoleTab) => {
+    const currentIndex = tabList.indexOf(currentTab);
+    let nextIndex = -1;
+    if (e.key === "ArrowRight") {
+      nextIndex = (currentIndex + 1) % tabList.length;
+    } else if (e.key === "ArrowLeft") {
+      nextIndex = (currentIndex - 1 + tabList.length) % tabList.length;
+    } else if (e.key === "Home") {
+      nextIndex = 0;
+    } else if (e.key === "End") {
+      nextIndex = tabList.length - 1;
+    }
+    if (nextIndex !== -1) {
+      e.preventDefault();
+      const nextTab = tabList[nextIndex];
+      setActiveTab(nextTab);
+      const el = document.getElementById(`tab-${nextTab}`);
+      el?.focus();
     }
   };
 
@@ -231,7 +373,7 @@ export default function Console({
       <header className="sticky top-0 z-40 w-full border-b border-vc-border bg-vc-sidebar/95 backdrop-blur-md">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-vc-primary text-vc-accent border border-vc-border flex items-center justify-center font-bold">
+            <div className="w-8 h-8 rounded-lg bg-vc-primary text-vc-accent border border-vc-border flex items-center justify-center font-bold shrink-0">
               <Shield size={18} />
             </div>
             <div>
@@ -239,9 +381,22 @@ export default function Console({
                 <span className="font-bold text-base tracking-tight text-vc-text-primary">
                   Vulnerability Response Console
                 </span>
-                <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-vc-card text-vc-text-secondary border border-vc-border uppercase tracking-wider">
-                  Assessment Only
-                </span>
+                {/* Contextual Scope Label */}
+                {protectionStatus.isRuleActive ? (
+                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-semibold bg-vc-warning/20 text-vc-warning border border-vc-warning/40">
+                    <span className="w-1.5 h-1.5 rounded-full bg-vc-warning animate-pulse" />
+                    <span>Containment Active</span>
+                  </span>
+                ) : protectionStatus.eligible ? (
+                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-semibold bg-vc-navigation-active text-vc-accent border border-vc-accent/30">
+                    <Shield size={11} />
+                    <span>Containment Available</span>
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-vc-card text-vc-text-secondary border border-vc-border">
+                    Dependency Security
+                  </span>
+                )}
               </div>
               <div className="text-[11px] text-vc-text-secondary/70 hidden sm:block">
                 OSV-backed npm dependency security & early warning analysis
@@ -249,7 +404,31 @@ export default function Console({
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
+            {/* Connections Popover Button */}
+            <button
+              onClick={() => setConnectionsOpen(!connectionsOpen)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-vc-card border border-vc-border hover:bg-vc-input text-vc-text-secondary hover:text-vc-text-primary text-xs font-medium transition-colors"
+              title="View Service Connections"
+            >
+              <Activity
+                size={14}
+                className={
+                  integrations.githubTokenConfigured
+                    ? "text-vc-success"
+                    : "text-vc-warning"
+                }
+              />
+              <span className="hidden sm:inline">Connections</span>
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  integrations.githubTokenConfigured
+                    ? "bg-vc-success"
+                    : "bg-vc-warning"
+                }`}
+              />
+            </button>
+
             {/* Inbox Button */}
             <button
               onClick={() => setInboxOpen(!inboxOpen)}
@@ -267,83 +446,171 @@ export default function Console({
             {/* Register App Button */}
             <button
               onClick={() => setRegisterModalOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-vc-primary hover:bg-vc-primary-hover text-vc-text-primary border border-vc-border text-xs font-semibold shadow-sm transition-colors"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-vc-primary hover:bg-vc-primary-hover text-vc-text-primary border border-vc-border text-xs font-semibold shadow-xs transition-colors"
             >
               <Plus size={14} />
-              <span>Register Repo</span>
+              <span className="hidden sm:inline">Register Repo</span>
             </button>
           </div>
         </div>
       </header>
 
       {/* Main Container */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 space-y-6">
-        {/* Environment Integrations Status Banner */}
-        <div className="p-3 bg-vc-card/60 border border-vc-border rounded-xl flex flex-wrap items-center justify-between gap-3 text-xs text-vc-text-secondary">
-          <div className="flex items-center gap-4">
-            <span className="font-semibold text-vc-text-primary">Integrations:</span>
-            <span className="flex items-center gap-1.5">
-              <span className={`w-2 h-2 rounded-full ${integrations.githubTokenConfigured ? "bg-vc-success" : "bg-vc-text-secondary/50"}`} />
-              <span>GitHub API {integrations.githubTokenConfigured ? "(Authenticated Token)" : "(Public Rate Limit)"}</span>
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className={`w-2 h-2 rounded-full ${integrations.geminiConfigured ? "bg-vc-success" : "bg-vc-warning"}`} />
-              <span>Gemini AI {integrations.geminiConfigured ? "(Active)" : "(Unconfigured — Using Fallback)"}</span>
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className={`w-2 h-2 rounded-full ${integrations.emailConfigured ? "bg-vc-success" : "bg-vc-text-secondary/50"}`} />
-              <span>Email {integrations.emailConfigured ? "(Resend Enabled)" : "(In-App Only)"}</span>
-            </span>
-          </div>
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-5 space-y-5">
+        {/* Compact Repository Toolbar */}
+        <div className="bg-vc-card border border-vc-border rounded-xl p-3 sm:p-4 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 shadow-xs">
+          {/* Left: Repository Selector, External Link, Scan Status, Target SHA, Last Scan Time */}
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* Repository Selector */}
+            <div className="flex items-center gap-1.5">
+              {applications.length === 0 ? (
+                <span className="text-xs text-vc-text-secondary italic">
+                  No repositories registered.
+                </span>
+              ) : (
+                <select
+                  value={selectedAppId || ""}
+                  onChange={(e) => handleSelectApp(e.target.value)}
+                  className="bg-vc-input border border-vc-border text-vc-text-primary rounded-lg px-2.5 py-1.5 text-xs font-semibold focus:outline-none focus:border-vc-accent cursor-pointer max-w-[240px] truncate"
+                  aria-label="Select Target Repository"
+                >
+                  {applications.map((app) => (
+                    <option key={app.id} value={app.id}>
+                      {app.displayName}
+                    </option>
+                  ))}
+                </select>
+              )}
 
-          <div className="text-[11px] text-vc-text-secondary/70">
-            Node.js Local Runtime • Strict Single-Process Mutex
-          </div>
-        </div>
+              {selectedApp && selectedApp.sourceType !== "local_demo" && (
+                <a
+                  href={selectedApp.canonicalRepoUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-vc-text-secondary hover:text-vc-text-primary p-1 rounded hover:bg-vc-input transition-colors"
+                  title="Open repository on GitHub"
+                >
+                  <ExternalLink size={14} />
+                </a>
+              )}
+            </div>
 
-        {/* Application Selector Bar */}
-        <div className="bg-vc-card border border-vc-border rounded-xl p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="text-xs font-semibold text-vc-text-secondary">Selected Target:</div>
-            {applications.length === 0 ? (
-              <span className="text-xs text-vc-text-secondary/70 italic">No repositories registered yet.</span>
+            {/* Local Demo Indicator or Commit SHA */}
+            {selectedApp?.sourceType === "local_demo" ? (
+              <span className="inline-flex items-center gap-1 font-mono text-[11px] text-vc-accent bg-vc-accent/10 px-2 py-0.5 rounded border border-vc-accent/30 font-semibold">
+                Local Demo Fixture
+              </span>
+            ) : activeReport?.resolvedCommitSha ? (
+              <span className="hidden sm:inline-flex items-center font-mono text-[11px] text-vc-text-secondary bg-vc-input/60 px-2 py-0.5 rounded border border-vc-border">
+                sha: {activeReport.resolvedCommitSha.slice(0, 7)}
+              </span>
+            ) : null}
+
+            {/* Return from Demo Quick Link */}
+            {selectedApp?.sourceType === "local_demo" && previousAppId && (
+              <button
+                type="button"
+                onClick={handleReturnFromDemo}
+                className="text-[11px] text-vc-accent hover:underline font-medium flex items-center gap-1 ml-1"
+                title="Return to previous repository"
+              >
+                <span>← Return to</span>
+                <span className="font-semibold">{applications.find((a) => a.id === previousAppId)?.displayName || "Repository"}</span>
+              </button>
+            )}
+
+            {/* Scan Status Badge */}
+            {activeReport ? (
+              <span
+                className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${
+                  activeReport.status === "complete"
+                    ? "bg-vc-navigation-active text-vc-success border border-vc-accent/30"
+                    : activeReport.status === "partial"
+                    ? "bg-vc-warning/15 text-vc-warning border border-vc-warning/40"
+                    : "bg-vc-danger/15 text-vc-danger border border-vc-danger/40"
+                }`}
+              >
+                Scan {activeReport.status}
+              </span>
             ) : (
-              <select
-                value={selectedAppId || ""}
-                onChange={(e) => setSelectedAppId(e.target.value)}
-                className="bg-vc-input border border-vc-border text-vc-text-primary rounded-lg px-3 py-1.5 text-xs font-medium focus:outline-none focus:border-vc-accent"
-              >
-                {applications.map((app) => (
-                  <option key={app.id} value={app.id}>
-                    {app.displayName} ({app.owner}/{app.repo})
-                  </option>
-                ))}
-              </select>
+              <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-vc-input text-vc-text-secondary border border-vc-border">
+                Not scanned yet
+              </span>
             )}
 
-            {selectedApp && (
-              <a
-                href={selectedApp.canonicalRepoUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-vc-text-secondary hover:text-vc-text-primary p-1"
-                title="Open GitHub Repository"
-              >
-                <ExternalLink size={15} />
-              </a>
+            {/* Last Scan Time */}
+            {activeReport ? (
+              <span className="text-[11px] text-vc-text-secondary hidden lg:inline">
+                Checked {new Date(activeReport.completedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            ) : null}
+
+            {/* AI Status Indicator */}
+            {activeReport && (
+              <span className="hidden xl:inline-flex items-center gap-1 text-[11px] text-vc-text-secondary">
+                <Sparkles size={11} className="text-vc-accent" />
+                <span className="capitalize">{activeReport.aiStatus}</span>
+              </span>
             )}
           </div>
 
-          {/* Primary Action Button */}
+          {/* Right: Scan Dependencies Button + Export Assessment Dropdown */}
           {selectedApp && (
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 shrink-0 self-end md:self-auto">
+              {/* Export Assessment Menu */}
+              {activeReport && (
+                <div className="relative">
+                  <button
+                    onClick={() => setExportMenuOpen(!exportMenuOpen)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-vc-input hover:bg-vc-border text-xs font-medium text-vc-text-secondary hover:text-vc-text-primary border border-vc-border transition-colors"
+                    aria-expanded={exportMenuOpen}
+                    aria-haspopup="true"
+                    title="Export assessment report"
+                  >
+                    <Download size={13} />
+                    <span>Export</span>
+                    <ChevronDown size={11} className={exportMenuOpen ? "rotate-180 transition-transform" : "transition-transform"} />
+                  </button>
+
+                  {exportMenuOpen && (
+                    <>
+                      <div
+                        className="fixed inset-0 z-40"
+                        onClick={() => setExportMenuOpen(false)}
+                      />
+                      <div className="absolute right-0 mt-1 z-50 w-48 bg-vc-card border border-vc-border rounded-xl shadow-xl p-1 text-xs space-y-0.5">
+                        <a
+                          href={`/api/reports/${activeReport.id}?format=markdown`}
+                          download
+                          onClick={() => setExportMenuOpen(false)}
+                          className="flex items-center gap-2 px-3 py-2 rounded-lg text-vc-text-secondary hover:text-vc-text-primary hover:bg-vc-input transition-colors"
+                        >
+                          <FileText size={13} className="text-vc-accent" />
+                          <span>Report Markdown (.md)</span>
+                        </a>
+                        <a
+                          href={`/api/reports/${activeReport.id}?format=json`}
+                          download
+                          onClick={() => setExportMenuOpen(false)}
+                          className="flex items-center gap-2 px-3 py-2 rounded-lg text-vc-text-secondary hover:text-vc-text-primary hover:bg-vc-input transition-colors"
+                        >
+                          <FileCode size={13} className="text-vc-accent" />
+                          <span>Report JSON (.json)</span>
+                        </a>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Scan Dependencies Button */}
               <button
                 onClick={handleTriggerScan}
                 disabled={isScanning}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-vc-primary hover:bg-vc-primary-hover disabled:opacity-50 text-xs font-bold text-vc-text-primary border border-vc-border shadow-sm transition-colors"
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-vc-primary hover:bg-vc-primary-hover disabled:opacity-50 text-xs font-bold text-vc-text-primary border border-vc-border shadow-xs transition-colors"
               >
-                <RefreshCw size={13} className={isScanning ? "animate-spin" : ""} />
-                <span>{isScanning ? "Scanning OSV & Dependencies..." : "Scan Dependencies"}</span>
+                <RefreshCw size={13} className={isScanning ? "animate-spin text-vc-accent" : ""} />
+                <span>{isScanning ? "Scanning..." : "Scan dependencies"}</span>
               </button>
             </div>
           )}
@@ -351,7 +618,7 @@ export default function Console({
 
         {/* Scan Error Banner */}
         {scanError && (
-          <div className="p-4 rounded-xl bg-vc-danger/15 border border-vc-danger/40 text-xs text-vc-danger flex items-start justify-between gap-2">
+          <div className="p-3.5 rounded-xl bg-vc-danger/15 border border-vc-danger/40 text-xs text-vc-danger flex items-start justify-between gap-2">
             <div>
               <strong className="text-vc-danger font-bold">Scan Error: </strong>
               {scanError}
@@ -362,7 +629,85 @@ export default function Console({
           </div>
         )}
 
-        {/* Main Content Area */}
+        {/* Accessible Navigation Tabs */}
+        {selectedApp && (
+          <div
+            role="tablist"
+            aria-label="Console Views"
+            className="flex items-center gap-1 border-b border-vc-border pb-1 text-xs"
+          >
+            <button
+              role="tab"
+              id="tab-findings"
+              aria-controls="tabpanel-findings"
+              aria-selected={activeTab === "findings"}
+              tabIndex={activeTab === "findings" ? 0 : -1}
+              onClick={() => setActiveTab("findings")}
+              onKeyDown={(e) => handleTabKeyDown(e, "findings")}
+              className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-lg font-semibold transition-colors ${
+                activeTab === "findings"
+                  ? "bg-vc-primary text-vc-text-primary border border-vc-border shadow-xs"
+                  : "text-vc-text-secondary hover:text-vc-text-primary hover:bg-vc-input/60"
+              }`}
+            >
+              <Layers size={14} />
+              <span>Findings</span>
+              {activeReport && (
+                <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-vc-input text-vc-text-primary border border-vc-border">
+                  {activeReport.findings.length}
+                </span>
+              )}
+            </button>
+
+            <button
+              role="tab"
+              id="tab-protection"
+              aria-controls="tabpanel-protection"
+              aria-selected={activeTab === "protection"}
+              tabIndex={activeTab === "protection" ? 0 : -1}
+              onClick={() => setActiveTab("protection")}
+              onKeyDown={(e) => handleTabKeyDown(e, "protection")}
+              className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-lg font-semibold transition-colors ${
+                activeTab === "protection"
+                  ? "bg-vc-primary text-vc-text-primary border border-vc-border shadow-xs"
+                  : "text-vc-text-secondary hover:text-vc-text-primary hover:bg-vc-input/60"
+              }`}
+            >
+              <Shield size={14} className={protectionStatus.isRuleActive ? "text-vc-warning" : ""} />
+              <span>Protection</span>
+              {protectionStatus.isRuleActive ? (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-vc-warning/20 text-vc-warning border border-vc-warning/40">
+                  <span className="w-1.5 h-1.5 rounded-full bg-vc-warning animate-pulse" />
+                  <span>Active</span>
+                </span>
+              ) : protectionStatus.eligible ? (
+                <span className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-vc-input text-vc-text-secondary border border-vc-border">
+                  Ready
+                </span>
+              ) : null}
+            </button>
+
+            <button
+              role="tab"
+              id="tab-handoff"
+              aria-controls="tabpanel-handoff"
+              aria-selected={activeTab === "handoff"}
+              tabIndex={activeTab === "handoff" ? 0 : -1}
+              onClick={() => setActiveTab("handoff")}
+              onKeyDown={(e) => handleTabKeyDown(e, "handoff")}
+              className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-lg font-semibold transition-colors ${
+                activeTab === "handoff"
+                  ? "bg-vc-primary text-vc-text-primary border border-vc-border shadow-xs"
+                  : "text-vc-text-secondary hover:text-vc-text-primary hover:bg-vc-input/60"
+              }`}
+            >
+              <Bot size={14} className="text-vc-accent" />
+              <span>Agent handoff</span>
+            </button>
+          </div>
+        )}
+
+        {/* Tab Panels */}
         {applications.length === 0 ? (
           <div className="bg-vc-card border border-vc-border rounded-xl p-16 text-center space-y-4">
             <Layers size={40} className="mx-auto text-vc-text-secondary/50" />
@@ -378,33 +723,200 @@ export default function Console({
               <span>Register Your First Repository</span>
             </button>
           </div>
-        ) : activeReport ? (
-          <div className="space-y-8">
-            <ReportView report={activeReport} onRefresh={handleTriggerScan} />
-            <CommunityReportForm
-              applicationId={selectedApp!.id}
-              signals={communitySignals}
-              onSignalAdded={(sig) => setCommunitySignals((prev) => [sig, ...prev])}
-            />
-          </div>
         ) : (
-          <div className="bg-vc-card border border-vc-border rounded-xl p-16 text-center space-y-4">
-            <Shield size={40} className="mx-auto text-vc-accent/60" />
-            <h3 className="text-base font-bold text-vc-text-primary">Repository Ready for Scan</h3>
-            <p className="text-xs text-vc-text-secondary max-w-md mx-auto leading-relaxed">
-              Target repository <strong className="text-vc-text-primary">{selectedApp?.displayName}</strong> has not been scanned yet. Click &quot;Scan Dependencies&quot; above to fetch its commit-pinned lockfile and query OSV.
-            </p>
-            <button
-              onClick={handleTriggerScan}
-              disabled={isScanning}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-vc-primary hover:bg-vc-primary-hover disabled:opacity-50 text-xs font-bold text-vc-text-primary border border-vc-border transition-colors"
+          <div className="pt-1">
+            {/* Tab 1: Findings */}
+            <div
+              role="tabpanel"
+              id="tabpanel-findings"
+              aria-labelledby="tab-findings"
+              className={activeTab === "findings" ? "block space-y-6" : "hidden"}
             >
-              <RefreshCw size={14} className={isScanning ? "animate-spin" : ""} />
-              <span>{isScanning ? "Running Scan..." : "Run First Scan"}</span>
-            </button>
+              {activeReport ? (
+                <ReportView
+                  report={activeReport}
+                  searchQuery={searchQuery}
+                  onSearchChange={setSearchQuery}
+                  severityFilter={severityFilter}
+                  onSeverityFilterChange={setSeverityFilter}
+                  selectedFinding={selectedFinding}
+                  onSelectFinding={setSelectedFinding}
+                />
+              ) : (
+                <div className="bg-vc-card border border-vc-border rounded-xl p-16 text-center space-y-4">
+                  <Shield size={40} className="mx-auto text-vc-accent/60" />
+                  <h3 className="text-base font-bold text-vc-text-primary">Repository Ready for Scan</h3>
+                  <p className="text-xs text-vc-text-secondary max-w-md mx-auto leading-relaxed">
+                    Target repository <strong className="text-vc-text-primary">{selectedApp?.displayName}</strong> has not been scanned yet. Click &quot;Scan dependencies&quot; above to fetch its commit-pinned lockfile and query OSV.
+                  </p>
+                  <button
+                    onClick={handleTriggerScan}
+                    disabled={isScanning}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-vc-primary hover:bg-vc-primary-hover disabled:opacity-50 text-xs font-bold text-vc-text-primary border border-vc-border transition-colors"
+                  >
+                    <RefreshCw size={14} className={isScanning ? "animate-spin" : ""} />
+                    <span>{isScanning ? "Running Scan..." : "Run First Scan"}</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Tab 2: Protection */}
+            <div
+              role="tabpanel"
+              id="tabpanel-protection"
+              aria-labelledby="tab-protection"
+              className={activeTab === "protection" ? "block space-y-6" : "hidden"}
+            >
+              {selectedApp && (
+                <ProtectionPanel
+                  applicationId={selectedApp.id}
+                  scanId={activeReport?.id}
+                  onNotificationUpdate={refreshNotifications}
+                  onStatusChange={setProtectionStatus}
+                  onOpenLocalDemo={handleOpenLocalDemo}
+                  isLocalDemo={selectedApp.sourceType === "local_demo"}
+                  onTriggerScan={handleTriggerScan}
+                  isScanning={isScanning}
+                />
+              )}
+            </div>
+
+            {/* Tab 3: Agent Handoff */}
+            <div
+              role="tabpanel"
+              id="tabpanel-handoff"
+              aria-labelledby="tab-handoff"
+              className={activeTab === "handoff" ? "block space-y-6" : "hidden"}
+            >
+              {activeReport && selectedApp ? (
+                <HandoffView report={activeReport} application={selectedApp} />
+              ) : (
+                <div className="bg-vc-card border border-vc-border rounded-xl p-12 text-center text-xs text-vc-text-secondary space-y-2">
+                  <Bot size={32} className="mx-auto text-vc-text-secondary/50" />
+                  <h3 className="font-bold text-vc-text-primary text-sm">No Scan Report Available</h3>
+                  <p>Run a scan on this repository to generate a grounded remediation handoff for a coding agent.</p>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </main>
+
+      {/* Connections Popover Modal */}
+      {connectionsOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div className="bg-vc-card border border-vc-border rounded-2xl max-w-lg w-full shadow-2xl p-6 text-vc-text-primary space-y-4">
+            <div className="flex items-center justify-between border-b border-vc-border pb-3">
+              <div className="flex items-center gap-2">
+                <Activity size={18} className="text-vc-accent" />
+                <h3 className="text-sm font-bold">Service & Integration Connections</h3>
+              </div>
+              <button
+                onClick={() => setConnectionsOpen(false)}
+                className="p-1 rounded-lg text-vc-text-secondary hover:text-vc-text-primary hover:bg-vc-input transition-colors"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              {/* GitHub API */}
+              <div className="p-3 rounded-lg bg-vc-input/50 border border-vc-border flex items-start justify-between gap-3">
+                <div className="space-y-0.5">
+                  <span className="font-bold text-vc-text-primary block">GitHub API</span>
+                  <span className="text-[11px] text-vc-text-secondary leading-relaxed">
+                    {integrations.githubTokenConfigured
+                      ? "GITHUB_TOKEN configured (Authenticated: 5,000 requests/hour)"
+                      : "Unauthenticated public rate limit (60 requests/hour limit)"}
+                  </span>
+                </div>
+                <span
+                  className={`px-2 py-0.5 rounded text-[10px] font-semibold shrink-0 ${
+                    integrations.githubTokenConfigured
+                      ? "bg-vc-success/15 text-vc-success border border-vc-success/30"
+                      : "bg-vc-warning/15 text-vc-warning border border-vc-warning/30"
+                  }`}
+                >
+                  {integrations.githubTokenConfigured ? "Token Active" : "Public Limit"}
+                </span>
+              </div>
+
+              {/* OSV Database */}
+              <div className="p-3 rounded-lg bg-vc-input/50 border border-vc-border flex items-start justify-between gap-3">
+                <div className="space-y-0.5">
+                  <span className="font-bold text-vc-text-primary block">OSV Vulnerability Database</span>
+                  <span className="text-[11px] text-vc-text-secondary leading-relaxed">
+                    api.osv.dev batch query and advisory hydration operational
+                  </span>
+                </div>
+                <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-vc-success/15 text-vc-success border border-vc-success/30 shrink-0">
+                  Live
+                </span>
+              </div>
+
+              {/* Gemini AI */}
+              <div className="p-3 rounded-lg bg-vc-input/50 border border-vc-border flex items-start justify-between gap-3">
+                <div className="space-y-0.5">
+                  <span className="font-bold text-vc-text-primary block">Gemini AI Synthesis</span>
+                  <span className="text-[11px] text-vc-text-secondary leading-relaxed">
+                    {integrations.geminiConfigured
+                      ? "GEMINI_API_KEY configured (Grounded schema analysis active)"
+                      : "Unconfigured: Truthful deterministic fallbacks active"}
+                  </span>
+                </div>
+                <span
+                  className={`px-2 py-0.5 rounded text-[10px] font-semibold shrink-0 ${
+                    integrations.geminiConfigured
+                      ? "bg-vc-success/15 text-vc-success border border-vc-success/30"
+                      : "bg-vc-input text-vc-text-secondary border border-vc-border"
+                  }`}
+                >
+                  {integrations.geminiConfigured ? "Configured" : "Fallback Mode"}
+                </span>
+              </div>
+
+              {/* Protection Controller */}
+              <div className="p-3 rounded-lg bg-vc-input/50 border border-vc-border flex items-start justify-between gap-3">
+                <div className="space-y-0.5">
+                  <span className="font-bold text-vc-text-primary block">Protection Controller (Port 8001)</span>
+                  <span className="text-[11px] text-vc-text-secondary leading-relaxed">
+                    {protectionStatus.controllerOnline
+                      ? "Loopback controller running on 127.0.0.1:8001 (Proxy on 8002)"
+                      : "Offline: Run 'npm run controller' in terminal to start"}
+                  </span>
+                </div>
+                <span
+                  className={`px-2 py-0.5 rounded text-[10px] font-semibold shrink-0 ${
+                    protectionStatus.controllerOnline
+                      ? "bg-vc-success/15 text-vc-success border border-vc-success/30"
+                      : "bg-vc-danger/15 text-vc-danger border border-vc-danger/30"
+                  }`}
+                >
+                  {protectionStatus.controllerOnline ? "Connected" : "Offline"}
+                </span>
+              </div>
+
+              {/* Email & Notifications */}
+              <div className="p-3 rounded-lg bg-vc-input/50 border border-vc-border flex items-start justify-between gap-3">
+                <div className="space-y-0.5">
+                  <span className="font-bold text-vc-text-primary block">Alert Notifications</span>
+                  <span className="text-[11px] text-vc-text-secondary leading-relaxed">
+                    In-app inbox active • Email: {integrations.emailConfigured ? "Resend dispatch active" : "In-app alerts only"}
+                  </span>
+                </div>
+                <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-vc-success/15 text-vc-success border border-vc-success/30 shrink-0">
+                  Inbox Active
+                </span>
+              </div>
+            </div>
+
+            <div className="pt-2 border-t border-vc-border text-[11px] text-vc-text-secondary/70 text-center">
+              Local Node.js environment with isolated atomic filesystem persistence.
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Notifications Drawer */}
       {inboxOpen && (
@@ -453,33 +965,32 @@ export default function Console({
                           : "bg-vc-input/60 border-vc-border/80 text-vc-text-secondary hover:bg-vc-input"
                       }`}
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className={`font-semibold ${!n.readAt ? "text-vc-text-primary" : "text-vc-text-secondary"}`}>
-                          {n.title}
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-vc-text-primary">{n.title}</span>
+                        <span className="text-[10px] text-vc-text-secondary">
+                          {new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </span>
-                        {!n.readAt && <span className="w-2 h-2 rounded-full bg-vc-accent" />}
                       </div>
-                      <p className="text-[11px] text-vc-text-secondary leading-relaxed line-clamp-2">
-                        {n.summary}
-                      </p>
-                      <div className="text-[10px] text-vc-text-secondary/70 pt-1">
-                        {new Date(n.createdAt).toLocaleString()}
-                      </div>
+                      <p className="text-[11px] leading-relaxed line-clamp-2">{n.summary}</p>
                     </div>
                   ))
                 )}
               </div>
             </div>
+
+            <div className="pt-4 border-t border-vc-border text-[11px] text-vc-text-secondary/70 text-center">
+              Click any notification to navigate directly to its scan assessment.
+            </div>
           </div>
         </div>
       )}
 
-      {/* Register Application Modal */}
+      {/* Register Repository Modal */}
       {registerModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-          <div className="bg-vc-card border border-vc-border rounded-2xl max-w-lg w-full p-6 text-vc-text-primary space-y-5 shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div className="bg-vc-card border border-vc-border rounded-xl max-w-lg w-full p-6 text-vc-text-primary space-y-4 shadow-2xl">
             <div className="flex items-center justify-between border-b border-vc-border pb-3">
-              <h3 className="text-base font-bold">Register GitHub Repository</h3>
+              <h3 className="text-sm font-bold">Register Target Repository</h3>
               <button
                 onClick={() => setRegisterModalOpen(false)}
                 className="p-1 rounded text-vc-text-secondary hover:text-vc-text-primary"
@@ -488,127 +999,80 @@ export default function Console({
               </button>
             </div>
 
-            <form onSubmit={handleRegisterApp} className="space-y-4 text-xs">
-              {registerError && (
-                <div className="p-3 rounded-lg bg-vc-danger/15 border border-vc-danger/40 text-vc-danger">
-                  {registerError}
-                </div>
-              )}
+            {registerError && (
+              <div className="p-3 rounded-lg bg-vc-danger/15 border border-vc-danger/40 text-vc-danger text-xs">
+                {registerError}
+              </div>
+            )}
 
+            <form onSubmit={handleRegisterApp} className="space-y-3.5 text-xs">
               <div>
-                <label className="block font-semibold text-vc-text-primary mb-1">
+                <label className="block text-vc-text-secondary font-medium mb-1">
                   GitHub Repository URL <span className="text-vc-danger">*</span>
                 </label>
                 <input
-                  type="url"
-                  required
-                  placeholder="https://github.com/owner/repo"
+                  type="text"
+                  placeholder="https://github.com/org/repo"
                   value={repoUrl}
                   onChange={(e) => setRepoUrl(e.target.value)}
-                  className="w-full px-3 py-2 bg-vc-input border border-vc-border rounded-lg text-vc-text-primary placeholder:text-vc-text-secondary/60 focus:outline-none focus:border-vc-accent"
+                  required
+                  className="w-full px-3 py-1.5 bg-vc-input border border-vc-border rounded-lg text-vc-text-primary focus:outline-none focus:border-vc-accent"
                 />
               </div>
 
               <div>
-                <label className="block font-semibold text-vc-text-primary mb-1">
+                <label className="block text-vc-text-secondary font-medium mb-1">
                   Display Name (Optional)
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. Production Web App"
+                  placeholder="My Node Service"
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
-                  className="w-full px-3 py-2 bg-vc-input border border-vc-border rounded-lg text-vc-text-primary placeholder:text-vc-text-secondary/60 focus:outline-none focus:border-vc-accent"
+                  className="w-full px-3 py-1.5 bg-vc-input border border-vc-border rounded-lg text-vc-text-primary focus:outline-none focus:border-vc-accent"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold text-vc-text-primary mb-1">
-                    Branch / Tag / Ref (Optional)
+                  <label className="block text-vc-text-secondary font-medium mb-1">
+                    Requested Branch / Tag
                   </label>
                   <input
                     type="text"
                     placeholder="main or v1.0.0"
                     value={requestedRef}
                     onChange={(e) => setRequestedRef(e.target.value)}
-                    className="w-full px-3 py-2 bg-vc-input border border-vc-border rounded-lg text-vc-text-primary placeholder:text-vc-text-secondary/60 focus:outline-none focus:border-vc-accent"
+                    className="w-full px-3 py-1.5 bg-vc-input border border-vc-border rounded-lg text-vc-text-primary focus:outline-none focus:border-vc-accent"
                   />
                 </div>
 
                 <div>
-                  <label className="block font-semibold text-vc-text-primary mb-1">
-                    Project Path (Optional)
+                  <label className="block text-vc-text-secondary font-medium mb-1">
+                    Project Path (Subdirectory)
                   </label>
                   <input
                     type="text"
-                    placeholder="apps/web or leave empty"
+                    placeholder="packages/api or ."
                     value={projectPath}
                     onChange={(e) => setProjectPath(e.target.value)}
-                    className="w-full px-3 py-2 bg-vc-input border border-vc-border rounded-lg text-vc-text-primary placeholder:text-vc-text-secondary/60 focus:outline-none focus:border-vc-accent"
+                    className="w-full px-3 py-1.5 bg-vc-input border border-vc-border rounded-lg text-vc-text-primary focus:outline-none focus:border-vc-accent"
                   />
                 </div>
               </div>
-
-              <div>
-                <label className="block font-semibold text-vc-text-primary mb-1">
-                  Deployment URL Reference (Optional — Display only; never fetched)
-                </label>
-                <input
-                  type="url"
-                  placeholder="https://example.com"
-                  value={deploymentUrl}
-                  onChange={(e) => setDeploymentUrl(e.target.value)}
-                  className="w-full px-3 py-2 bg-vc-input border border-vc-border rounded-lg text-vc-text-primary placeholder:text-vc-text-secondary/60 focus:outline-none focus:border-vc-accent"
-                />
-              </div>
-
-              <div>
-                <label className="block font-semibold text-vc-text-primary mb-1">
-                  Deployment Claim Type
-                </label>
-                <select
-                  value={deploymentClaim}
-                  onChange={(e) => setDeploymentClaim(e.target.value as "repository_snapshot" | "developer_declared_commit")}
-                  className="w-full px-3 py-2 bg-vc-input border border-vc-border rounded-lg text-vc-text-primary focus:outline-none focus:border-vc-accent"
-                >
-                  <option value="repository_snapshot">Repository Snapshot (Default branch or specified ref)</option>
-                  <option value="developer_declared_commit">Developer-Declared Deployed Commit SHA</option>
-                </select>
-              </div>
-
-              {deploymentClaim === "developer_declared_commit" && (
-                <div>
-                  <label className="block font-semibold text-vc-text-primary mb-1">
-                    Declared Deployed Commit SHA (40-character hex) <span className="text-vc-danger">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    maxLength={40}
-                    placeholder="40-character hex SHA"
-                    value={declaredDeployedCommit}
-                    onChange={(e) => setDeclaredDeployedCommit(e.target.value)}
-                    className="w-full px-3 py-2 bg-vc-input border border-vc-border rounded-lg text-vc-text-primary font-mono placeholder:text-vc-text-secondary/60 focus:outline-none focus:border-vc-accent"
-                  />
-                  <p className="text-[10px] text-vc-warning mt-1">
-                    Note: Declared commit is self-reported by developer and not independently verified against live deployment.
-                  </p>
-                </div>
-              )}
 
               <div className="pt-2 flex justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setRegisterModalOpen(false)}
-                  className="px-3 py-1.5 rounded-lg bg-vc-input hover:bg-vc-border text-vc-text-secondary hover:text-vc-text-primary border border-vc-border transition-colors"
+                  className="px-3 py-1.5 rounded-lg bg-vc-input hover:bg-vc-border text-vc-text-secondary hover:text-vc-text-primary text-xs font-medium"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={isRegistering || !repoUrl.trim()}
-                  className="px-4 py-1.5 rounded-lg bg-vc-primary hover:bg-vc-primary-hover disabled:opacity-50 text-vc-text-primary font-semibold border border-vc-border transition-colors"
+                  disabled={isRegistering}
+                  className="px-4 py-1.5 rounded-lg bg-vc-primary hover:bg-vc-primary-hover text-vc-text-primary font-bold text-xs border border-vc-border transition-colors disabled:opacity-50"
                 >
                   {isRegistering ? "Registering..." : "Register"}
                 </button>

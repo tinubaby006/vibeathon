@@ -1,3 +1,6 @@
+// components/report-view.tsx
+// Refactored Findings View: compact summary, expandable scan details, search/filters, findings table, and inspection drawer.
+
 'use client';
 
 import { useState, useMemo } from "react";
@@ -11,9 +14,9 @@ import {
   AlertOctagon,
   AlertTriangle,
   CheckCircle2,
-  Download,
+  ChevronDown,
   ExternalLink,
-  FileText,
+  FileCode,
   Filter,
   Info,
   Search,
@@ -24,12 +27,36 @@ import {
 interface ReportViewProps {
   report: ScanReport;
   onRefresh?: () => void;
+  searchQuery?: string;
+  onSearchChange?: (q: string) => void;
+  severityFilter?: string;
+  onSeverityFilterChange?: (filter: string) => void;
+  selectedFinding?: Finding | null;
+  onSelectFinding?: (f: Finding | null) => void;
 }
 
-export default function ReportView({ report }: ReportViewProps) {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [severityFilter, setSeverityFilter] = useState<string>("all");
-  const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
+export default function ReportView({
+  report,
+  searchQuery: externalSearchQuery,
+  onSearchChange,
+  severityFilter: externalSeverityFilter,
+  onSeverityFilterChange,
+  selectedFinding: externalSelectedFinding,
+  onSelectFinding,
+}: ReportViewProps) {
+  // Support both controlled (from Console parent) and uncontrolled (standalone page) state
+  const [internalSearchQuery, setInternalSearchQuery] = useState("");
+  const [internalSeverityFilter, setInternalSeverityFilter] = useState("all");
+  const [internalSelectedFinding, setInternalSelectedFinding] = useState<Finding | null>(null);
+
+  const searchQuery = externalSearchQuery !== undefined ? externalSearchQuery : internalSearchQuery;
+  const setSearchQuery = onSearchChange || setInternalSearchQuery;
+
+  const severityFilter = externalSeverityFilter !== undefined ? externalSeverityFilter : internalSeverityFilter;
+  const setSeverityFilter = onSeverityFilterChange || setInternalSeverityFilter;
+
+  const selectedFinding = externalSelectedFinding !== undefined ? externalSelectedFinding : internalSelectedFinding;
+  const setSelectedFinding = onSelectFinding || setInternalSelectedFinding;
 
   const filteredFindings = useMemo(() => {
     return report.findings.filter((f) => {
@@ -63,6 +90,21 @@ export default function ReportView({ report }: ReportViewProps) {
     return counts;
   }, [report.findings]);
 
+  const uniquePackages = useMemo(() => {
+    return new Set(report.findings.map((f) => f.packageName)).size;
+  }, [report.findings]);
+
+  const directCount = useMemo(() => {
+    return report.findings.filter((f) => {
+      const dep = report.inventory.find(
+        (i) => i.packageName === f.packageName && i.version === f.version
+      );
+      return dep ? dep.direct : false;
+    }).length;
+  }, [report.findings, report.inventory]);
+
+  const transitiveCount = report.findings.length - directCount;
+
   const enrichedCount =
     report.aiCoverage?.enrichedFindings ??
     report.findings.filter((f) => Boolean(f.aiExplanation)).length;
@@ -71,208 +113,197 @@ export default function ReportView({ report }: ReportViewProps) {
     totalFindings > 0 ? Math.round((enrichedCount / totalFindings) * 100) : 0;
 
   return (
-    <div className="space-y-6">
-      {/* Top Header Card */}
-      <div className="bg-vc-card border border-vc-border rounded-xl p-6 text-vc-text-primary">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-vc-border pb-4 mb-6">
-          <div>
-            <div className="flex items-center gap-3">
-              <h2 className="text-xl font-bold tracking-tight text-vc-text-primary">
-                {report.applicationSnapshot.displayName}
-              </h2>
-              <span
-                className={`px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wider ${
-                  report.status === "complete"
-                    ? "bg-vc-navigation-active text-vc-success border border-vc-accent/30"
-                    : report.status === "partial"
-                    ? "bg-vc-warning/15 text-vc-warning border border-vc-warning/40"
-                    : "bg-vc-danger/15 text-vc-danger border border-vc-danger/40"
-                }`}
-              >
-                Scan {report.status}
-              </span>
-            </div>
-            <p className="text-xs text-vc-text-secondary mt-1">
-              Checked at {new Date(report.completedAt).toLocaleString()} • Target SHA:{" "}
-              {report.resolvedCommitSha ? (
-                <code className="text-vc-text-primary font-mono font-medium">
-                  {report.resolvedCommitSha.substring(0, 7)}
-                </code>
-              ) : report.status === "failed" ? (
-                <span className="text-vc-warning font-mono text-[11px]">
-                  N/A (Resolution Failed)
-                </span>
-              ) : (
-                <code className="text-vc-text-secondary font-mono">N/A</code>
-              )}
-            </p>
+    <div className="space-y-4 text-xs text-vc-text-primary">
+      {/* 1. Compact Summary Bar */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {/* Total Findings & Unique Affected Packages */}
+        <div className="bg-vc-card border border-vc-border rounded-xl p-3.5 space-y-1">
+          <div className="text-vc-text-secondary font-medium">Findings</div>
+          <div className="text-2xl font-bold text-vc-text-primary">
+            {report.findings.length}
           </div>
-
-          {/* Action Download Buttons */}
-          <div className="flex items-center gap-2">
-            <a
-              href={`/api/reports/${report.id}?format=markdown`}
-              download
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-vc-input hover:bg-vc-border text-xs font-medium text-vc-text-secondary hover:text-vc-text-primary border border-vc-border transition-colors"
-            >
-              <Download size={13} />
-              <span>Markdown</span>
-            </a>
-            <a
-              href={`/api/reports/${report.id}?format=json`}
-              download
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-vc-input hover:bg-vc-border text-xs font-medium text-vc-text-secondary hover:text-vc-text-primary border border-vc-border transition-colors"
-            >
-              <Download size={13} />
-              <span>JSON</span>
-            </a>
+          <div className="text-[11px] text-vc-text-secondary">
+            across {uniquePackages} {uniquePackages === 1 ? "package" : "packages"}
           </div>
         </div>
 
-        {/* Coverage and Stats Bar */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <div className="bg-vc-input/60 rounded-lg p-3 border border-vc-border">
-            <div className="text-xs text-vc-text-secondary">Total Findings</div>
-            <div className="text-2xl font-bold text-vc-text-primary mt-1">
-              {report.findings.length}
-            </div>
-            <div className="text-[11px] text-vc-text-secondary mt-0.5">
-              {severityCounts.critical} critical • {severityCounts.high} high
-            </div>
+        {/* Severity Breakdown & Direct vs Transitive */}
+        <div className="bg-vc-card border border-vc-border rounded-xl p-3.5 space-y-1">
+          <div className="text-vc-text-secondary font-medium">Severities</div>
+          <div className="flex items-center gap-1.5 text-xs font-semibold mt-1 flex-wrap">
+            {severityCounts.critical > 0 && (
+              <span className="text-vc-danger">{severityCounts.critical} crit</span>
+            )}
+            {severityCounts.high > 0 && (
+              <span className="text-vc-warning">{severityCounts.high} high</span>
+            )}
+            {severityCounts.medium > 0 && (
+              <span className="text-amber-400">{severityCounts.medium} med</span>
+            )}
+            {severityCounts.low > 0 && (
+              <span className="text-vc-text-secondary">{severityCounts.low} low</span>
+            )}
+            {report.findings.length === 0 && (
+              <span className="text-vc-success">0 vulnerabilities</span>
+            )}
           </div>
-
-          <div className="bg-vc-input/60 rounded-lg p-3 border border-vc-border">
-            <div className="text-xs text-vc-text-secondary">Dependencies Queried</div>
-            <div className="text-2xl font-bold text-vc-text-primary mt-1">
-              {report.coverage.queriedPairs}
-            </div>
-            <div className="text-[11px] text-vc-text-secondary mt-0.5">
-              {report.coverage.uniqueQueryablePairs} unique npm pairs
-            </div>
-          </div>
-
-          <div className="bg-vc-input/60 rounded-lg p-3 border border-vc-border">
-            <div className="text-xs text-vc-text-secondary">Exclusions / Failed</div>
-            <div className="text-2xl font-bold text-vc-warning mt-1">
-              {report.coverage.excludedEntries + report.coverage.failedPairs}
-            </div>
-            <div className="text-[11px] text-vc-text-secondary mt-0.5">
-              {report.coverage.excludedEntries} excluded • {report.coverage.failedPairs} failed
-            </div>
-          </div>
-
-          <div className="bg-vc-input/60 rounded-lg p-3 border border-vc-border">
-            <div className="text-xs text-vc-text-secondary">AI Coverage</div>
-            <div className="text-lg font-bold text-vc-text-primary mt-1 flex items-center gap-1.5">
-              <Sparkles size={16} className="text-vc-accent" />
-              <span>
-                {enrichedCount} / {totalFindings}
-              </span>
-            </div>
-            <div className="text-[11px] text-vc-text-secondary mt-0.5 capitalize">
-              {report.aiStatus} status • {coveragePercent}% enriched
-            </div>
+          <div className="text-[11px] text-vc-text-secondary">
+            {directCount} direct • {transitiveCount} transitive
           </div>
         </div>
 
-        {/* Scan Failure Details Banner */}
-        {report.status === "failed" && (
-          <div className="mt-4 p-4 rounded-xl bg-vc-danger/15 border border-vc-danger/40 text-xs text-vc-danger space-y-3">
-            <div className="flex items-center justify-between gap-2 border-b border-vc-danger/30 pb-2.5">
-              <div className="flex items-center gap-2">
-                <AlertOctagon size={18} className="text-vc-danger shrink-0" />
-                <span className="text-sm font-bold text-vc-text-primary tracking-wide">
-                  Scan Failed: Assessment Incomplete
-                </span>
-              </div>
-              {report.providerFailures[0]?.code && (
-                <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-vc-danger/20 border border-vc-danger/40 text-vc-danger">
-                  {report.providerFailures[0].code}
-                </span>
-              )}
-            </div>
-
-            {report.providerFailures.map((failure, idx) => (
-              <div key={idx} className="space-y-2">
-                <div className="flex items-center gap-2 text-[11px]">
-                  <span className="text-vc-danger font-semibold uppercase tracking-wider text-[10px]">
-                    Failed Stage:
-                  </span>
-                  <code className="font-mono text-vc-text-primary bg-vc-danger/25 px-2 py-0.5 rounded border border-vc-danger/50 font-semibold">
-                    {formatStageName(failure.stage)}
-                  </code>
-                  {failure.retryable && (
-                    <span className="text-[10px] px-2 py-0.5 rounded bg-vc-warning/15 text-vc-warning border border-vc-warning/40 ml-auto font-medium">
-                      Retryable
-                    </span>
-                  )}
-                </div>
-
-                <div className="text-xs text-vc-text-primary leading-relaxed bg-vc-input/80 p-3 rounded-lg border border-vc-danger/30">
-                  <strong className="text-vc-danger font-semibold">Sanitized Reason: </strong>
-                  {sanitizeFailureMessage(failure.message)}
-                </div>
-
-                {getActionableGuidance(failure.code, failure.message)}
-              </div>
-            ))}
+        {/* Dependency Coverage */}
+        <div className="bg-vc-card border border-vc-border rounded-xl p-3.5 space-y-1">
+          <div className="text-vc-text-secondary font-medium">Dependency Coverage</div>
+          <div className="text-2xl font-bold text-vc-text-primary">
+            {report.coverage.queriedPairs}
           </div>
-        )}
-
-        {/* Partial Warning Banner */}
-        {report.status === "partial" && report.providerFailures.length > 0 && (
-          <div className="mt-4 p-3 rounded-lg bg-vc-warning/15 border border-vc-warning/40 text-xs text-vc-warning space-y-2">
-            <div className="flex items-center gap-2 font-semibold text-vc-warning">
-              <AlertTriangle size={15} />
-              <span>Partial Coverage Notice: Some upstream lookups were incomplete</span>
-            </div>
-            {report.providerFailures.map((failure, idx) => (
-              <div key={idx} className="text-[11px] text-vc-text-primary pl-5">
-                • <strong className="text-vc-warning">{formatStageName(failure.stage)}:</strong> {sanitizeFailureMessage(failure.message)}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Assessment Boundary Warning */}
-        <div className="mt-4 p-3 rounded-lg bg-vc-input border border-vc-border text-xs text-vc-text-secondary flex items-start gap-2">
-          <Info size={16} className="text-vc-info shrink-0 mt-0.5" />
-          <div>
-            <span className="font-semibold text-vc-text-primary">Assessment Scope: </span>
-            {report.assessmentBoundary}
+          <div className="text-[11px] text-vc-text-secondary truncate">
+            of {report.coverage.uniqueQueryablePairs} npm pairs queried
+            {report.coverage.excludedEntries > 0 && ` (${report.coverage.excludedEntries} excl)`}
           </div>
         </div>
 
-        {/* Executive Summary: Factual Overall Totals & Clearly Scoped AI Summary */}
-        <div className="mt-4 p-4 rounded-xl bg-vc-input/50 border border-vc-border space-y-3">
-          <div>
-            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-vc-text-secondary">
-              <FileText size={15} className="text-vc-accent shrink-0" />
-              <span>Overall Factual Assessment ({report.findings.length} total findings):</span>
-            </div>
-            <p className="text-xs text-vc-text-primary mt-1.5 leading-relaxed pl-5 font-mono">
-              {report.deterministicSummary}
-            </p>
+        {/* AI Coverage */}
+        <div className="bg-vc-card border border-vc-border rounded-xl p-3.5 space-y-1">
+          <div className="text-vc-text-secondary font-medium flex items-center justify-between">
+            <span>AI Coverage</span>
+            <Sparkles size={13} className="text-vc-accent" />
           </div>
-
-          {report.aiSummary && (
-            <div className="pt-3 border-t border-vc-border">
-              <div className="flex items-center gap-2 text-xs font-semibold text-vc-accent">
-                <Sparkles size={15} className="text-vc-accent shrink-0" />
-                <span>
-                  AI Summary (Subset: {enrichedCount} of {totalFindings} findings covered
-                  {enrichedCount < totalFindings ? " • Prioritized subset" : ""}):
-                </span>
-              </div>
-              <p className="text-xs text-vc-text-secondary mt-1.5 leading-relaxed pl-5 italic">
-                {report.aiSummary}
-              </p>
-            </div>
-          )}
+          <div className="text-2xl font-bold text-vc-text-primary">
+            {enrichedCount} / {totalFindings}
+          </div>
+          <div className="text-[11px] text-vc-text-secondary capitalize">
+            {report.aiStatus} status ({coveragePercent}% enriched)
+          </div>
         </div>
       </div>
 
-      {/* Filter and Search Bar */}
+      {/* 2. Concise Scope Notice */}
+      <div className="p-2.5 rounded-lg bg-vc-input/50 border border-vc-border text-[11px] text-vc-text-secondary flex items-center gap-2">
+        <Info size={14} className="text-vc-accent shrink-0" />
+        <span>
+          <strong className="text-vc-text-primary font-semibold">Scope: </strong>
+          Assessment is strictly bounded to npm lockfile declarations and matching OSV advisories. Does not execute application code or inspect runtime reachability.
+        </span>
+      </div>
+
+      {/* 3. Expandable Technical Scan Details */}
+      <details className="group border border-vc-border rounded-xl bg-vc-card/60 p-3 text-xs transition-colors">
+        <summary className="flex items-center justify-between cursor-pointer font-semibold text-vc-text-secondary hover:text-vc-text-primary select-none">
+          <span className="flex items-center gap-2">
+            <FileCode size={14} className="text-vc-accent" />
+            <span>Scan Technical Details & Metadata</span>
+          </span>
+          <ChevronDown size={14} className="transition-transform group-open:rotate-180 text-vc-text-secondary" />
+        </summary>
+        <div className="mt-3 pt-3 border-t border-vc-border/70 grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px]">
+          <div>
+            <span className="text-vc-text-secondary block">Target Commit SHA:</span>
+            <code className="font-mono text-vc-text-primary font-medium">{report.resolvedCommitSha || "N/A"}</code>
+          </div>
+          <div>
+            <span className="text-vc-text-secondary block">Lockfile Hash (SHA-256):</span>
+            <code className="font-mono text-vc-text-primary font-medium truncate block" title={report.lockfileHash || undefined}>
+              {report.lockfileHash || "N/A"}
+            </code>
+          </div>
+          <div>
+            <span className="text-vc-text-secondary block">Project Path & Ref:</span>
+            <span className="text-vc-text-primary">
+              Path: &apos;{report.applicationSnapshot.projectPath || "."}&apos; • Ref: {report.applicationSnapshot.requestedRef || "default branch"}
+            </span>
+          </div>
+          <div>
+            <span className="text-vc-text-secondary block">Scanned Manifests:</span>
+            <div className="flex flex-wrap gap-2 mt-0.5">
+              {report.scannedFiles.map((f, i) => (
+                <a
+                  key={i}
+                  href={f.gitHubUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-vc-accent hover:underline"
+                >
+                  <span>{f.path}</span>
+                  <ExternalLink size={11} />
+                </a>
+              ))}
+            </div>
+          </div>
+          {report.providerFailures.length > 0 && (
+            <div className="sm:col-span-2 p-2.5 rounded-lg bg-vc-danger/10 border border-vc-danger/30 text-vc-danger space-y-1">
+              <span className="font-bold">Provider Issues Recorded:</span>
+              {report.providerFailures.map((pf, i) => (
+                <div key={i} className="text-[11px]">
+                  • [{formatStageName(pf.stage)}] {sanitizeFailureMessage(pf.message)}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </details>
+
+      {/* 4. Scan Failure Diagnostics Banner (if failed) */}
+      {report.status === "failed" && (
+        <div className="p-4 rounded-xl bg-vc-danger/15 border border-vc-danger/40 text-xs text-vc-danger space-y-3">
+          <div className="flex items-center justify-between gap-2 border-b border-vc-danger/30 pb-2.5">
+            <div className="flex items-center gap-2">
+              <AlertOctagon size={18} className="text-vc-danger shrink-0" />
+              <span className="text-sm font-bold text-vc-text-primary tracking-wide">
+                Scan Failed: Assessment Incomplete
+              </span>
+            </div>
+            {report.providerFailures[0]?.code && (
+              <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-vc-danger/20 border border-vc-danger/40 text-vc-danger">
+                {report.providerFailures[0].code}
+              </span>
+            )}
+          </div>
+
+          {report.providerFailures.map((failure, idx) => (
+            <div key={idx} className="space-y-2">
+              <div className="flex items-center gap-2 text-[11px]">
+                <span className="text-vc-danger font-semibold uppercase tracking-wider text-[10px]">
+                  Failed Stage:
+                </span>
+                <code className="font-mono text-vc-text-primary bg-vc-danger/25 px-2 py-0.5 rounded border border-vc-danger/50 font-semibold">
+                  {formatStageName(failure.stage)}
+                </code>
+                {failure.retryable && (
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-vc-warning/15 text-vc-warning border border-vc-warning/40 ml-auto font-medium">
+                    Retryable
+                  </span>
+                )}
+              </div>
+
+              <div className="text-xs text-vc-text-primary leading-relaxed bg-vc-input/80 p-3 rounded-lg border border-vc-danger/30">
+                <strong className="text-vc-danger font-semibold">Sanitized Reason: </strong>
+                {sanitizeFailureMessage(failure.message)}
+              </div>
+
+              {getActionableGuidance(failure.code, failure.message)}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 5. Partial Warning Banner (if partial) */}
+      {report.status === "partial" && report.providerFailures.length > 0 && (
+        <div className="p-3 rounded-lg bg-vc-warning/15 border border-vc-warning/40 text-xs text-vc-warning space-y-2">
+          <div className="flex items-center gap-2 font-semibold text-vc-warning">
+            <AlertTriangle size={15} />
+            <span>Partial Coverage Notice: Some upstream lookups were incomplete</span>
+          </div>
+          {report.providerFailures.map((failure, idx) => (
+            <div key={idx} className="text-[11px] text-vc-text-primary pl-5">
+              • <strong className="text-vc-warning">{formatStageName(failure.stage)}:</strong> {sanitizeFailureMessage(failure.message)}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 6. Filter and Search Bar */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-vc-card border border-vc-border p-3 rounded-xl">
         <div className="relative flex-1">
           <Search size={15} className="absolute left-3 top-2.5 text-vc-text-secondary" />
@@ -281,7 +312,7 @@ export default function ReportView({ report }: ReportViewProps) {
             placeholder="Search by package name, advisory ID (e.g. GHSA-xxx, CVE-xxx)..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-3 py-1.5 bg-vc-input border border-vc-border rounded-lg text-sm text-vc-text-primary placeholder:text-vc-text-secondary/60 focus:outline-none focus:border-vc-accent"
+            className="w-full pl-9 pr-3 py-1.5 bg-vc-input border border-vc-border rounded-lg text-xs text-vc-text-primary placeholder:text-vc-text-secondary/60 focus:outline-none focus:border-vc-accent"
           />
         </div>
 
@@ -302,7 +333,7 @@ export default function ReportView({ report }: ReportViewProps) {
         </div>
       </div>
 
-      {/* Findings Table */}
+      {/* 7. Findings Table */}
       <div className="bg-vc-card border border-vc-border rounded-xl overflow-hidden">
         {filteredFindings.length === 0 ? (
           <div className="p-12 text-center">
@@ -315,7 +346,7 @@ export default function ReportView({ report }: ReportViewProps) {
                   <code className="font-mono text-vc-danger bg-vc-input px-1.5 py-0.5 rounded font-semibold">
                     {formatStageName(report.providerFailures[0]?.stage || "unknown")}
                   </code>
-                  . Check the diagnostic panel above for sanitized error details and resolution steps.
+                  . Check the diagnostic details above for resolution steps.
                 </p>
               </div>
             ) : report.findings.length === 0 ? (
@@ -414,7 +445,7 @@ export default function ReportView({ report }: ReportViewProps) {
         )}
       </div>
 
-      {/* Finding Detail Modal */}
+      {/* 8. Finding Detail Modal Drawer */}
       {selectedFinding && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
           <div className="bg-vc-card border border-vc-border rounded-2xl max-w-2xl w-full max-h-[85vh] overflow-y-auto shadow-2xl p-6 text-vc-text-primary space-y-5">
@@ -458,7 +489,7 @@ export default function ReportView({ report }: ReportViewProps) {
               </p>
             </div>
 
-            {/* Evidence & Paths */}
+            {/* Evidence & Candidate Fixes */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
               <div className="bg-vc-input p-3 rounded-lg border border-vc-border">
                 <div className="text-vc-text-secondary text-[11px] font-medium">Affected Version Range</div>
@@ -480,7 +511,7 @@ export default function ReportView({ report }: ReportViewProps) {
               </div>
             </div>
 
-            {/* Installed Paths */}
+            {/* Installed Locations */}
             <div className="text-xs space-y-1">
               <div className="text-vc-text-secondary font-medium">Installed Locations:</div>
               <div className="space-y-1">
@@ -630,4 +661,3 @@ function getActionableGuidance(code?: string, message?: string): React.ReactNode
 
   return null;
 }
-

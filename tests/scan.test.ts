@@ -1,4 +1,4 @@
-import { describe, it, beforeEach } from "node:test";
+import { describe, it, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { executeScan, ScannerError } from "../lib/scanner";
 import { Application } from "../lib/contracts";
@@ -6,14 +6,31 @@ import { readStore, getNotifications, acquireScanLock, releaseScanLock } from ".
 import { renderReportMarkdown } from "../lib/report";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import os from "node:os";
+import { randomUUID } from "node:crypto";
 
-const STATE_FILE_PATH = path.resolve(process.cwd(), "data", "state.json");
+let tempDir: string;
+let stateFilePath: string;
 
 describe("Scanner Pipeline Integration", () => {
+  before(async () => {
+    tempDir = path.join(os.tmpdir(), `vrc-test-scan-${randomUUID()}`);
+    await fs.mkdir(tempDir, { recursive: true });
+    stateFilePath = path.join(tempDir, "state.json");
+    process.env.VRC_STATE_FILE_PATH = stateFilePath;
+  });
+
+  after(async () => {
+    delete process.env.VRC_STATE_FILE_PATH;
+    try {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    } catch {}
+  });
+
   beforeEach(async () => {
     try {
       await fs.writeFile(
-        STATE_FILE_PATH,
+        stateFilePath,
         JSON.stringify({
           schemaVersion: 1,
           applications: [],

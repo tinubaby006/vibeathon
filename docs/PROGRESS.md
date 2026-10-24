@@ -198,3 +198,124 @@ Status: **Checkpoint One Complete & Audited** (Assessment and Recommendations On
   - `npm.cmd run build`: Compiled Next.js 16.3.5 Turbopack production build successfully.
 - **Scope & Constraints Check:** Zero logic, layout, or contract changes; zero new files created; Checkpoint-One scope preserved; Checkpoint Two not started.
 
+---
+
+## 9. Checkpoint Two — Tested, Developer-Approved Route Containment
+
+### Phase 0: Inspect and Baseline
+- **Verified Baseline:** Inspected repository instructions (`AGENTS.md`), existing checkpoint notes, `package.json`, and current git status.
+- **Test Storage Isolation Fixed:** Identified that `tests/store.test.ts` and `tests/scan.test.ts` directly reset the primary store file at `data/state.json`. Added dynamic storage path resolution via `process.env.VRC_STATE_FILE_PATH` in `lib/store.ts` and isolated test runs in temporary directories (`os.tmpdir()`), ensuring automated test runs never overwrite or reset real user data.
+- **Baseline Verification:**
+  - `npm.cmd test`: 26/26 tests passing across 5 suites.
+  - `npm.cmd run lint`: 0 errors, 0 warnings.
+
+### Phase 1: Prove the Local Scenario
+- **Demo Application Created:** Created standalone package `examples/preview-settings-demo/` with:
+  - `package.json`: exact `lodash: "4.17.11"`.
+  - `package-lock.json`: lockfileVersion 3.
+  - `worker.js`: disposable child process worker executing `lodash.defaultsDeep` in isolation with 8 KiB input cap, 16 KiB output cap, 2s execution timeout, and clean prototype check.
+  - `server.js`: Node HTTP server on `127.0.0.1:8003` with `/health`, `/catalog`, `POST /preview` (max 2 concurrent workers, increments `previewRequestCounter`), and `/__demo/identity`.
+- **Gate 1 Verification:**
+  - Benign `/preview` request -> `prototypePolluted: false`.
+  - Exploitation payload `{"constructor": {"prototype": {"__vrc_demo_marker__": "vrc_verified_cve_2019_10744"}}}` on `lodash@4.17.11` -> `prototypePolluted: true`, `markerValue: "vrc_verified_cve_2019_10744"`.
+  - Patched comparison on `lodash@4.17.12` in an isolated temp directory -> `isPolluted: false`.
+
+### Phase 2: Build Shared Proxy and Controller Core
+- **Modules Created:**
+  - `services/protection/types.ts`: Zod schemas and TypeScript types for `ProtectionProposal`, `TestRun`, `Approval`, `RuntimeStatus`, `Rule` (`disable_route`), and controller API requests/responses. Canonical hashing via sorted JSON and SHA-256.
+  - `services/protection/store.ts`: Controller store managing `data/protection-state.json` with serialized atomic operations, mutex, bounded history, and restart restoration.
+  - `services/protection/proxy.ts`: Loopback HTTP reverse proxy forwarding to 8003, with strict canonical path normalization (rejects backslashes, ambiguous `%2f`/`%5c`, and directory traversal `..`), rule evaluator for `disable_route` returning 503 `ROUTE_TEMPORARILY_DISABLED` with zero upstream dispatch, internal control path isolation (blocks `/__demo/identity`), and ephemeral test proxy factory.
+  - `services/protection/server.ts`: Controller HTTP API on `127.0.0.1:8001` requiring `Bearer <CONTROLLER_TOKEN>`, controller-wide single-operation lock, and clean shutdown.
+- **Gate 2 Verification:** No-rule forwarding verified; disabled route blocked with 503 before upstream dispatch (counter delta = 0); unrelated routes (`/catalog`) remained available; internal control endpoints blocked with 403.
+
+### Phase 3: Proposal, Test Evidence, and Approval Lifecycle
+- **Test Runner & Scenario:** Implemented `services/protection/scenario.ts` defining fixed scenario `demo-scenario-lodash-4.17.11` and running bounded 5-step test on an ephemeral isolated proxy on dynamic port `0`.
+- **Approval & Activation Enforcement:** Approval requires `acknowledgedFunctionalityLoss: true` and passing, non-expired test evidence (15-minute window). Activation validates target fingerprint, installs rule on active proxy atomically, and executes post-activation verification. Rollback removes rule and verifies route restoration.
+- **Gate 3 Verification:** Live proxy remained untouched during isolated testing; approval rejected without acknowledgement; valid approval activated and verified on active proxy; rollback restored `/preview`.
+
+### Phase 4: Connect Existing Scanner and Explanation Layer
+- **Binding Validator & Client:** Created `lib/protection.ts` with `validateScanTargetBinding` checking application project path, exact `lodash@4.17.11` dependency, advisory `GHSA-jf85-cpcp-j695`, and live target demo identity.
+- **AI Explanation with Deterministic Fallback:** Grounded Gemini prompt generates plain-English explanation, functionality cost, and limitations; falls back cleanly to deterministic explanation with `aiStatus: "deterministic_fallback"` when Gemini is unconfigured or unavailable.
+- **API Routes:** Implemented Next.js routes under `app/api/protection/`:
+  - `GET /api/protection/status`
+  - `POST /api/protection/proposals`
+  - `POST /api/protection/tests`
+  - `POST /api/protection/approvals`
+  - `POST /api/protection/activate`
+  - `POST /api/protection/rollback`
+- **Gate 4 Verification:** Unrelated applications (such as `snyk-labs/nodejs-goof`) are rejected with explicit ineligibility reason.
+
+### Phase 5: Add the UI
+- **Demo Protection Panel:** Created `components/protection-panel.tsx` adhering to the dark `--color-vc-*` palette. Displays scope badge, target identity, advisory, notice of functionality loss, proposal generation, isolated test observation table (9 checks), mandatory acknowledgement checkbox, approve & activate button, active containment rollback, and recent audit history.
+- **Console Integration:** Mounted `ProtectionPanel` in `components/console.tsx` under `ReportView`.
+- **Hidden Entry Point:** Hid the unused `CommunityReportForm` UI entry point as requested, without deleting records or modifying backend APIs.
+- **Gate 5 Verification:** Interface reflects real backend controller state with 5-second bounded polling; actions disabled during active operations; no client-only bypass.
+
+### Phase 6: Focused Automated Verification
+- **Test Suite:** Created `tests/protection.test.ts` covering all required scenarios:
+  1. Real prototype pollution reproduction on `lodash@4.17.11` worker.
+  2. Clean prototype on benign preview requests.
+  3. Patched comparison with `lodash@4.17.12` in isolated directory.
+  4. Path canonicalization, ambiguous separator rejection, and directory traversal blocking.
+  5. Internal control endpoint isolation (`/__demo/identity` blocked with 403).
+  6. Ephemeral isolated proxy testing with zero live proxy modification.
+  7. Zero upstream dispatch for blocked traffic (request counter delta = 0).
+  8. Controller token authentication enforcement.
+  9. Full lifecycle: Proposal -> Test -> Approval -> Activation -> Rollback.
+  10. Scan-to-target binding rejection for arbitrary/unrelated repositories.
+  11. Truthful deterministic AI fallback provenance.
+  12. Restoration of active containment from persisted state on controller restart.
+- **Test Outcomes:**
+  - `npm.cmd test`: **37 tests passed across 6 test suites (0 failed)**.
+    - Assessment Normalization & Rules (5)
+    - GitHub URL and Path Validation (4)
+    - npm Inventory Parser (7)
+    - Checkpoint 2 Protection Controller & Proxy Suite (11)
+    - Scanner Pipeline Integration (5)
+    - Store Persistence & Concurrency (5)
+
+### Phase 7: End-to-End Verification
+- **Package Scripts:** Added `"controller": "tsx services/protection/server.ts"` and `"demo": "node examples/preview-settings-demo/server.js"` to `package.json`.
+- **Linter:** `npm.cmd run lint` passed with **0 errors and 0 warnings**.
+- **Tests:** `npm.cmd test` passed with **37/37 passing**.
+- **Production Build:** `npm.cmd run build` passed with exit code 0; Turbopack production build completed; all 14 routes generated cleanly.
+- **GitHub Publication Boundary:** Documented that remote GitHub repository publication of `examples/preview-settings-demo` is pending user authorization. Local fixture bindings and ephemeral proxy tests are completely verified.
+
+### Phase 8: Handoff and Runbook
+- Created `docs/CHECKPOINT_TWO_DEMO.md` with complete 2-minute demo runbook, architecture diagrams, command references, and bypass disclosures.
+- All Checkpoint 1 capabilities preserved; dark theme styling preserved; store isolation verified.
+
+---
+
+## 10. Remediation Handoff for Coding Agent
+
+### Feature Overview & Architectural Guarantees
+- **Decoupled & Offline-Ready:** "Generate remediation handoff" operates on any saved scan report without requiring the Protection Controller, a running demo server, or active proxy containment.
+- **Immutable Scan Grounding:** Handoff packages target facts directly from the immutable scan record: repository URL, project path, resolved commit SHA, lockfile SHA-256 hash, and finding inventory.
+- **Truthful Fix & Severity Provenance:** Fixed versions are sourced strictly from OSV advisory data. If an advisory lists `no_fix_listed` (e.g. unmaintained dependencies like Babel 6), the handoff explicitly states that no upstream patch is listed and directs the coding agent NOT to fabricate version numbers.
+- **Direct vs Transitive Guidance:**
+  - *Direct Dependencies:* Instructs the coding agent to bump the version specifier in `package.json` and regenerate `package-lock.json`.
+  - *Transitive Dependencies:* Surfaces the exact dependency path, advising the agent to upgrade the top-level parent dependency or evaluate package manager overrides/resolutions with caution.
+- **Instruction Grounding & "Not Executed" Status:** All receiving coding agent instructions require verifying checkout integrity, checking working tree status to preserve uncommitted work, and confirming reachability. Proposed verification checks are explicitly labelled `Not executed (Pending Coding Agent Run)` so receiving models do not assume checks have passed. Agents are instructed never to auto-commit, push, deploy, or disable containment.
+- **Protection Evidence Boundaries:** If protection state exists in `data/protection-state.json`, it is attached only if the application ID and scan ID strictly match. Demo protection evidence is explicitly tagged with `targetType: "isolated_demo"` and a prominent disclaimer stating that loopback containment is an isolated temporary mitigation, NOT a permanent code patch, and does NOT prove the library safe.
+- **Dual Export Formats:** The same underlying `RemediationHandoff` model powers both Markdown (`.md`) and JSON (`.json`) downloads from `/api/reports/[scanId]/handoff?format=markdown|json`.
+- **Pure Read-Only:** Generating a handoff or downloading files never triggers fresh scans, external AI calls, or test runner executions, and never alters finding statuses in storage.
+
+### Deliverables Created / Updated
+1. `lib/handoff.ts`: Core data structures (`RemediationHandoff`, `RemediationFindingItem`, `ContainmentEvidenceSnapshot`, `CodingAgentInstructions`), builder function `buildRemediationHandoff`, and Markdown renderer `renderHandoffMarkdown`.
+2. `app/api/reports/[scanId]/handoff/route.ts`: API endpoint serving JSON data (`GET /api/reports/:scanId/handoff`), Markdown download attachment (`?format=markdown`), and JSON download attachment (`?format=json`).
+3. `components/report-view.tsx`: Added "Generate remediation handoff" button in the scan report view; modal dialog matching the `--color-vc-*` dark theme with operational notices, one-click copy to clipboard, direct downloads, and monospace preview.
+4. `tests/handoff.test.ts`: 6 automated tests covering offline generation, direct/transitive guidance, truthful no-fix handling, coding agent instructions with "Not executed" labels, scan-bound protection evidence snapshotting, and Markdown rendering.
+
+### Verification Results
+| Verification Check | Command | Actual Recorded Result | Status |
+|---|---|---|---|
+| Full Automated Test Suite | `npm.cmd test` | **43 tests passed across 7 test suites (0 failed)**:<br>- Assessment Normalization & Rules (5)<br>- GitHub URL and Path Validation (4)<br>- Remediation Handoff for Coding Agent (6)<br>- npm Inventory Parser (7)<br>- Checkpoint 2 Protection Controller & Proxy Suite (11)<br>- Scanner Pipeline Integration (5)<br>- Store Persistence & Concurrency (5) | Passed |
+| Linter Verification | `npm.cmd run lint` | ESLint 9 executed with **0 errors and 0 warnings**. | Passed |
+| Production Build | `npm.cmd run build` | Next.js 16.3.5 (Turbopack) production compilation completed in 2.6s; TypeScript passed in 5.4s; all 15 routes generated (including `/api/reports/[scanId]/handoff`). | Passed |
+| Existing Scan Handoff Generation | `verify_handoff.ts` on scan `4eaa6a9d` | Correctly extracted repo `renovatebot/tutorial`, commit `755485b7591d8eb8371fc923cce0172c4138176f`, lockfile hash `e9df11d4e6...`, 6 findings (5 direct, 1 transitive), candidate fixed releases without invention, and no protection evidence fallback. | Passed |
+| API Route JSON & Downloads | `GET /api/reports/:scanId/handoff` | - JSON API: HTTP 200, `{ ok: true, data: {...}, markdown: "..." }`<br>- Markdown Download: HTTP 200, `Content-Disposition: attachment; filename="remediation-handoff-renovatebot-tutorial-4eaa6a9d.md"`, 10,094 bytes<br>- JSON Download: HTTP 200, `Content-Disposition: attachment; filename="remediation-handoff-renovatebot-tutorial-4eaa6a9d.json"`, schemaVersion 1 | Passed |
+| Read-Only Integrity | Verification script | Verified `patchStatus` of all findings remained identical before and after handoff generation (no mutation). | Passed |
+| Checkpoint 2 Continuity | Suite execution | Demo app, controller endpoints, proxy routing, approval lifecycle, and rollback verified unregressed and fully active. | Passed |
+
+

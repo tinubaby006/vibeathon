@@ -1,0 +1,13 @@
+{
+  "name": "preview-settings-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone demo application for Checkpoint 2 route containment verification",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "lodash": "4.17.11"
+  }
+}
