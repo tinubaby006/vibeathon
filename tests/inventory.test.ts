@@ -165,4 +165,98 @@ describe("npm Inventory Parser", () => {
     assert.equal(lodash.version, "4.17.21");
     assert.notEqual(lodash.version, "^4.0.0");
   });
+
+  it("does not classify hoisted transitive dependencies as direct", () => {
+    // Only express is declared directly in package.json
+    const pkgJson = JSON.stringify({
+      dependencies: {
+        express: "^4.19.2",
+      },
+    });
+
+    // In lockfile, accepts is hoisted to top-level node_modules/accepts as a transitive dependency
+    const lockJson = JSON.stringify({
+      name: "hoisted-test",
+      lockfileVersion: 3,
+      packages: {
+        "": {
+          name: "hoisted-test",
+          dependencies: { express: "^4.19.2" },
+        },
+        "node_modules/express": {
+          version: "4.19.2",
+        },
+        "node_modules/accepts": {
+          version: "1.3.8",
+        },
+      },
+    });
+
+    const result = parseNpmInventory(pkgJson, lockJson);
+    const express = result.entries.find((e) => e.packageName === "express");
+    const accepts = result.entries.find((e) => e.packageName === "accepts");
+
+    assert.ok(express);
+    assert.equal(express.direct, true, "Directly declared express must have direct === true");
+
+    assert.ok(accepts);
+    assert.equal(
+      accepts.direct,
+      false,
+      "Hoisted transitive dependency accepts must NOT be classified as direct"
+    );
+  });
+
+  it("does not mark every version of a directly declared package as direct", () => {
+    // package.json directly declares lodash v4
+    const pkgJson = JSON.stringify({
+      dependencies: {
+        lodash: "^4.17.21",
+      },
+    });
+
+    // In lockfile, root resolved instance is node_modules/lodash (4.17.21)
+    // while a nested transitive dependency pulls in legacy lodash (3.10.1)
+    const lockJson = JSON.stringify({
+      name: "multi-version-test",
+      lockfileVersion: 3,
+      packages: {
+        "": {
+          name: "multi-version-test",
+          dependencies: { lodash: "^4.17.21" },
+        },
+        "node_modules/lodash": {
+          version: "4.17.21",
+        },
+        "node_modules/some-tool": {
+          version: "1.0.0",
+        },
+        "node_modules/some-tool/node_modules/lodash": {
+          version: "3.10.1",
+        },
+      },
+    });
+
+    const result = parseNpmInventory(pkgJson, lockJson);
+    const lodashV4 = result.entries.find(
+      (e) => e.packageName === "lodash" && e.version === "4.17.21"
+    );
+    const lodashV3 = result.entries.find(
+      (e) => e.packageName === "lodash" && e.version === "3.10.1"
+    );
+
+    assert.ok(lodashV4, "Direct lodash v4 must be in inventory");
+    assert.equal(
+      lodashV4.direct,
+      true,
+      "Resolved instance node_modules/lodash for root manifest must be direct === true"
+    );
+
+    assert.ok(lodashV3, "Nested lodash v3 must be in inventory");
+    assert.equal(
+      lodashV3.direct,
+      false,
+      "Nested transitive version node_modules/some-tool/node_modules/lodash must have direct === false"
+    );
+  });
 });

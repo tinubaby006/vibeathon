@@ -38,7 +38,12 @@ export function renderReportMarkdown(report: ScanReport): string {
   lines.push(`- **Excluded Entries:** ${report.coverage.excludedEntries}`);
   lines.push(`- **Hydrated Advisories:** ${report.coverage.hydratedAdvisories}`);
   lines.push(`- **Unhydrated Advisory IDs:** ${report.coverage.unhydratedAdvisoryIds.length > 0 ? report.coverage.unhydratedAdvisoryIds.join(", ") : "None"}`);
-  lines.push(`- **AI Enrichment Status:** ${report.aiStatus}`);
+  const enrichedCount =
+    report.aiCoverage?.enrichedFindings ??
+    report.findings.filter((f) => Boolean(f.aiExplanation)).length;
+  const totalFindings = report.aiCoverage?.totalFindings ?? report.findings.length;
+
+  lines.push(`- **AI Coverage:** ${enrichedCount} / ${totalFindings} findings enriched (${report.aiStatus})`);
   lines.push("");
 
   if (report.coverage.exclusions.length > 0) {
@@ -62,10 +67,14 @@ export function renderReportMarkdown(report: ScanReport): string {
   // 3. Summary
   lines.push("## 3. Executive Summary");
   lines.push("");
+  lines.push(`### Factual Overall Summary (${report.findings.length} Total Findings)`);
+  lines.push("");
   lines.push(report.deterministicSummary);
   if (report.aiSummary) {
     lines.push("");
-    lines.push(`> **AI Summary (${report.aiStatus}):** ${report.aiSummary}`);
+    lines.push(`### AI Summary (Subset: ${enrichedCount} of ${totalFindings} findings covered)`);
+    lines.push("");
+    lines.push(`> *${report.aiSummary}*`);
   }
   lines.push("");
 

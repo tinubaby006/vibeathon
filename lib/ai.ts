@@ -10,7 +10,7 @@ import {
 } from "./contracts";
 
 const AI_FINDINGS_BATCH_SIZE = 5;
-const MAX_ENRICHED_FINDINGS = 20;
+const MAX_ENRICHED_FINDINGS = 5;
 
 const AiRecommendationSchema = z.object({
   type: z.enum([
@@ -58,6 +58,10 @@ function getGeminiClient(): { client: GoogleGenAI; model: string } | null {
 export interface AiEnrichmentResult {
   aiStatus: "completed" | "partial" | "unavailable" | "failed" | "not_needed";
   aiSummary?: string;
+  aiCoverage: {
+    enrichedFindings: number;
+    totalFindings: number;
+  };
   enrichedFindings: Finding[];
   error?: string;
 }
@@ -73,6 +77,7 @@ export async function enrichFindingsWithAi(
   if (findings.length === 0) {
     return {
       aiStatus: "not_needed",
+      aiCoverage: { enrichedFindings: 0, totalFindings: 0 },
       enrichedFindings: findings,
     };
   }
@@ -81,6 +86,7 @@ export async function enrichFindingsWithAi(
   if (!aiConfig) {
     return {
       aiStatus: "unavailable",
+      aiCoverage: { enrichedFindings: 0, totalFindings: findings.length },
       enrichedFindings: findings,
       error: "GEMINI_API_KEY is not configured",
     };
@@ -120,7 +126,7 @@ export async function enrichFindingsWithAi(
 
     const prompt = `Return a JSON object conforming exactly to this structure:
 {
-  "summary": "Overall summary of the findings (max 600 chars)",
+  "summary": "Technical summary specifically covering these ${batch.length} prioritized findings (do not claim to summarize unanalyzed findings across the repository; max 600 chars)",
   "findings": [
     {
       "findingKey": "<must match findingKey from input>",
@@ -231,15 +237,25 @@ ${JSON.stringify(inputData, null, 2)}
 
   const finalFindings = [...updatedEnriched, ...remainingFindings];
 
-  const aiStatus = anyBatchSucceeded
-    ? enrichedMap.size === targetFindings.length
-      ? "completed"
-      : "partial"
-    : "failed";
+  const enrichedCount = enrichedMap.size;
+  const totalFindings = findings.length;
+
+  let aiStatus: "completed" | "partial" | "unavailable" | "failed" | "not_needed";
+  if (!anyBatchSucceeded) {
+    aiStatus = "failed";
+  } else if (enrichedCount >= totalFindings) {
+    aiStatus = "completed";
+  } else {
+    aiStatus = "partial";
+  }
 
   return {
     aiStatus,
     aiSummary: overallSummary,
+    aiCoverage: {
+      enrichedFindings: enrichedCount,
+      totalFindings,
+    },
     enrichedFindings: finalFindings,
     error: anyBatchSucceeded ? undefined : lastError,
   };

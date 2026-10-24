@@ -185,13 +185,22 @@ export function buildDeterministicRecommendations(
     });
   } else if (finding.patchStatus === "no_fix_listed") {
     recs.push({
-      type: "monitor_advisory",
+      type: "investigate_applicability",
       origin: "deterministic",
-      action: `Monitor advisory ${finding.advisoryId} for upstream fix release`,
-      rationale: "Matching advisory was retrieved from OSV but lists no fixed release for this package.",
-      potentialImpact: "Application remains on affected version until upstream releases an update.",
+      action: `Investigate mitigation, replacement, or migration for ${finding.packageName}; no fix listed in advisory ${finding.advisoryId}`,
+      rationale: `Advisory ${finding.advisoryId} lists no fixed release for ${finding.packageName}. Upstream may not backport a patch, especially if this version or major release is unmaintained, deprecated, or superseded.`,
+      potentialImpact: "An upstream patch is not guaranteed and may never be released for this version. Consider dependency replacement, major version migration, architectural isolation, or input restrictions.",
       evidenceIds: [finding.advisoryId, ...finding.sourceIds],
       limitations: "No active protection or automated patch is applied in this assessment console.",
+    });
+    recs.push({
+      type: "monitor_advisory",
+      origin: "deterministic",
+      action: `Monitor advisory ${finding.advisoryId} for published workarounds or ecosystem status updates`,
+      rationale: "OSV records currently show no resolved release; monitor for community workarounds, deprecation notices, or ecosystem guidance.",
+      potentialImpact: "Do not rely on an upstream patch being released for legacy, superseded, or unmaintained versions.",
+      evidenceIds: [finding.advisoryId, ...finding.sourceIds],
+      limitations: "Advisory status reflects published OSV metadata; upstream maintenance status is not independently verified.",
     });
   } else {
     recs.push({

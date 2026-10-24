@@ -249,6 +249,7 @@ export async function executeScan(
       providerFailures,
       aiStatus: aiResult.aiStatus,
       aiSummary: aiResult.aiSummary,
+      aiCoverage: aiResult.aiCoverage,
       deterministicSummary,
       applicationSnapshot: {
         displayName: application.displayName,
@@ -323,6 +324,7 @@ function buildFailedReport(params: {
       },
     ],
     aiStatus: "not_needed",
+    aiCoverage: { enrichedFindings: 0, totalFindings: 0 },
     deterministicSummary: `Scan failed at stage '${params.stage}': ${sanitizedMessage}`,
     applicationSnapshot: {
       displayName: params.application.displayName,

@@ -75,13 +75,6 @@ export function parseNpmInventory(
     throw new InventoryError("package.json is malformed JSON", "MALFORMED_LOCKFILE");
   }
 
-  const directDepNames = new Set<string>([
-    ...Object.keys(manifest.dependencies || {}),
-    ...Object.keys(manifest.devDependencies || {}),
-    ...Object.keys(manifest.optionalDependencies || {}),
-    ...Object.keys(manifest.peerDependencies || {}),
-  ]);
-
   // 3. Parse package-lock.json
   let lock: RawPackageLock;
   try {
@@ -106,6 +99,24 @@ export function parseNpmInventory(
       "MALFORMED_LOCKFILE"
     );
   }
+
+  // Determine directly declared dependencies from root manifest and lock root entry
+  const rootLockPkg = (
+    typeof lock.packages[""] === "object" && lock.packages[""] !== null
+      ? lock.packages[""]
+      : {}
+  ) as RawPackageJson;
+
+  const directDepNames = new Set<string>([
+    ...Object.keys(manifest.dependencies || {}),
+    ...Object.keys(manifest.devDependencies || {}),
+    ...Object.keys(manifest.optionalDependencies || {}),
+    ...Object.keys(manifest.peerDependencies || {}),
+    ...Object.keys(rootLockPkg.dependencies || {}),
+    ...Object.keys(rootLockPkg.devDependencies || {}),
+    ...Object.keys(rootLockPkg.optionalDependencies || {}),
+    ...Object.keys(rootLockPkg.peerDependencies || {}),
+  ]);
 
   const exclusions: Array<{ name: string; versionSpec: string; reason: string }> = [];
   const warnings: string[] = [];
@@ -205,7 +216,7 @@ export function parseNpmInventory(
     }
 
     const key = `${packageName}@${cleanedVersion}`;
-    const isDirect = directDepNames.has(packageName) || pkgPath === `node_modules/${packageName}`;
+    const isDirect = directDepNames.has(packageName) && pkgPath === `node_modules/${packageName}`;
 
     let existing = pairMap.get(key);
     if (!existing) {

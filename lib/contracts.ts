@@ -91,6 +91,11 @@ export interface ApplicationSnapshot {
   declaredDeployedCommit: string | null;
 }
 
+export interface AiCoverage {
+  enrichedFindings: number;
+  totalFindings: number;
+}
+
 export interface ScanReport {
   id: string;
   applicationId: string;
@@ -111,6 +116,7 @@ export interface ScanReport {
   }>;
   aiStatus: "completed" | "partial" | "unavailable" | "failed" | "not_needed";
   aiSummary?: string;
+  aiCoverage?: AiCoverage;
   deterministicSummary: string;
   applicationSnapshot: ApplicationSnapshot;
   assessmentBoundary: string;

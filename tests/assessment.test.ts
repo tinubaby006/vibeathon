@@ -225,4 +225,85 @@ describe("Assessment Normalization & Rules", () => {
     assert.equal(result.findings[0].severity, "unknown");
     assert.equal(result.findings[0].severitySource, "CVSS_V3");
   });
+
+  it("verifies deterministic no-fix recommendation does not promise a future upstream patch (Babel 6 case)", () => {
+    // Model an unmaintained package with no fixed release, like Babel 6
+    const detail: OsvAdvisoryDetail = {
+      id: "GHSA-babel6-no-fix",
+      summary: "Arbitrary code execution in legacy unmaintained package",
+      database_specific: { severity: "HIGH" },
+      affected: [
+        {
+          package: { ecosystem: "npm", name: "babel-traverse" },
+          ranges: [
+            {
+              type: "SEMVER",
+              events: [{ introduced: "6.0.0" }], // No fixed event listed
+            },
+          ],
+        },
+      ],
+    };
+
+    const inventory: DependencyEntry[] = [
+      {
+        ecosystem: "npm",
+        packageName: "babel-traverse",
+        version: "6.26.0",
+        paths: ["node_modules/babel-traverse"],
+        direct: false,
+        categories: ["development"],
+        originStatus: "supported",
+      },
+    ];
+
+    const lookup: OsvLookupResult = {
+      matches: [
+        {
+          packageName: "babel-traverse",
+          version: "6.26.0",
+          advisoryIds: ["GHSA-babel6-no-fix"],
+        },
+      ],
+      advisories: new Map([["GHSA-babel6-no-fix", detail]]),
+      unhydratedAdvisoryIds: [],
+      failedQueries: [],
+      queriedCount: 1,
+    };
+
+    const result = normalizeAssessment(inventory, lookup);
+    assert.equal(result.findings.length, 1);
+    const finding = result.findings[0];
+    assert.equal(finding.patchStatus, "no_fix_listed");
+    assert.deepEqual(finding.fixedVersionsListed, []);
+
+    // Check all deterministic recommendations
+    const allRecText = finding.recommendations
+      .flatMap((r) => [r.action, r.rationale, r.potentialImpact])
+      .join(" ");
+
+    // Must NOT promise a future upstream patch or tell user to wait for upstream release
+    assert.ok(
+      !allRecText.includes("for upstream fix release"),
+      "Must not promise an upstream fix release will occur"
+    );
+    assert.ok(
+      !allRecText.includes("until upstream releases an update"),
+      "Must not promise application will receive an upstream update"
+    );
+
+    // Must truthfully guide toward mitigation, replacement, or migration
+    assert.ok(
+      allRecText.includes("Investigate mitigation, replacement, or migration"),
+      "Must advise investigating mitigation, replacement, or migration"
+    );
+    assert.ok(
+      allRecText.includes("An upstream patch is not guaranteed and may never be released"),
+      "Must explicitly warn that an upstream patch is not guaranteed and may never be released"
+    );
+    assert.ok(
+      allRecText.includes("Do not rely on an upstream patch being released"),
+      "Must caution against relying on an upstream patch for legacy or unmaintained versions"
+    );
+  });
 });
